@@ -32,3 +32,13 @@ class SegmentationMaskResult extends InferenceResult {
   final int width;
   SegmentationMaskResult(this.maskData, this.height, this.width);
 }
+
+class ErrorResult extends InferenceResult {
+  final String errorMessage;
+  ErrorResult(this.errorMessage);
+}
+
+class GenericDataResult extends InferenceResult {
+  final dynamic data; // Can be any type of data
+  GenericDataResult(this.data);
+}

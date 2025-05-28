@@ -6,15 +6,16 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
-import '../data_models/pipeline.dart';
+import 'dart:developer' as developer;
 import 'package:yaml/yaml.dart';
+import '../data_models/pipeline.dart';
+import '../data_models/inference_result_model.dart';
 import '../utils/list_extensions.dart';
 import '../utils/data_types.dart';
 import '../utils/math.dart';
-import 'dart:developer' as developer;
 
 
-// inference object that contains methods for loading models, pre and post processing, and running the actual inference
+// inference class that contains methods for loading models, pre and post processing, and running the actual inference
 class InferenceService {
   // initialize interpreter, pipeline (metadata), etc
   Interpreter? _interpreter;
@@ -31,16 +32,19 @@ class InferenceService {
   InferenceService({
     required this.modelPath,
     required this.pipelinePath,
-  }) 
-  
-  {
-    loadModel(modelPath);
-    loadPipeline(pipelinePath);
+  });
+
+  // Call this to initialize
+  Future<void> initialize() async {
+    await loadPipeline(pipelinePath); // Load pipeline first to get model info if needed
+    await loadModel(modelPath); // Load model
+    await loadLabelsIfNeeded(); // Load labels if needed by any postprocessing step
   }
 
   // load model from model_path (AKA create an interpreter)
   Future<void> loadModel(String modelPath, {String modelFramework="tflite"}) async {
     if (modelFramework == "tflite") {
+      debugPrint("Loading TFLite model from $modelPath...");
       final options = InterpreterOptions();
 
       try {
@@ -77,6 +81,41 @@ class InferenceService {
 
     if (kDebugMode) {
       debugPrint("Model pipeline file loaded successfully.");
+    }
+  }
+
+  Future<void> loadLabelsIfNeeded() async {
+    debugPrint("Loading labels if needed...");
+    if (modelPipeline == null) return;
+    String? labelsUrl;
+    for (var block in modelPipeline!.postprocessing) {
+        for (var step in block.steps) {
+            if (step.step == 'map_labels') {
+                labelsUrl = step.params['labels_url'] as String?;
+                break;
+            }
+        }
+        if (labelsUrl != null) break;
+    }
+
+    if (labelsUrl != null) {
+        try {
+            final labelsData = await rootBundle.loadString(labelsUrl);
+            _labels = labelsData.split('\n').map((label) => label.trim()).where((label) => label.isNotEmpty).toList();
+            if (kDebugMode) {
+                debugPrint("InferenceService: Labels loaded from $labelsUrl: ${_labels?.length} labels");
+            }
+        } catch (e) {
+            if (kDebugMode) {
+                debugPrint("InferenceService: Failed to load labels from $labelsUrl: $e");
+            }
+            _labels = []; // Default to empty on error
+        }
+    } else {
+        _labels = [];
+        if (kDebugMode) {
+            debugPrint("InferenceService: No 'labels_url' found in any 'map_labels' postprocessing step.");
+        }
     }
   }
 
@@ -219,6 +258,7 @@ class InferenceService {
     String outputName = block.output_name;
     // declare a variable to track the current output
     dynamic currentResult = rawOutputs[block.source_tensors[0]];
+    String interpretation = block.interpretation.toString().toLowerCase();
     
     debugPrint("Checking if the postprocessing block contains steps...");
     // make sure pipeline includes postprocessing steps? if it doesn't, skip all of this and return rawInput
@@ -263,9 +303,29 @@ class InferenceService {
 
 
     debugPrint("Adding result from postprocess block ${modelPipeline!.postprocessing[postprocessBlockIndex].output_name} to the final results map.");
-
-    // return final output map
-    return currentResult;
+    debugPrint("Mapping postprocessed result to a sealed inference result class for interpretation $interpretation");
+    switch (interpretation) {
+      case 'classification_logits':
+      case 'classification_scores':
+      case 'classification_probabilities':
+        if (currentResult is List) {
+          try { return ClassificationResult(currentResult.cast<Map<String, dynamic>>()); }
+          catch (e) { return ErrorResult("Postprocessing for '$outputName' (classification) produced a List, but elements were not Map<String, dynamic>."); }
+        }
+        return ErrorResult("Postprocessing for '$outputName' (classification) did not produce a List. Got ${currentResult.runtimeType}");
+      case 'detection_boxes_scores_classes':
+        if (currentResult is List) {
+          try { return DetectionResult(currentResult.cast<Map<String, dynamic>>()); }
+          catch (e) { return ErrorResult("Postprocessing for '$outputName' (detection) produced a List, but elements were not Map<String, dynamic>."); }
+        }
+        return ErrorResult("Postprocessing for '$outputName' (detection) did not produce a List. Got ${currentResult.runtimeType}");
+      case 'text_generation':
+            if (currentResult is String) { return TextResult(currentResult); }
+            return ErrorResult("Postprocessing for '$outputName' (text) did not produce a String. Got ${currentResult.runtimeType}");
+      default:
+        if (kDebugMode) debugPrint("InferenceService: Warning: Unknown postprocessing interpretation '$interpretation' for output '$outputName'. Wrapping as GenericDataResult.");
+        return GenericDataResult(currentResult);
+    }
   }
 
 
@@ -339,10 +399,8 @@ class InferenceService {
           else if (method == "normalize_uniform") {
             var mean = step.params['mean'] ?? 127.5;
             var stddev = step.params['stddev'] ?? 127.5;
-            for (var i = 0; i < inputData.length; i += 3) {
+            for (var i = 0; i < inputData.length; i++) {
               normBytes[i] = (inputData[i] - mean) / stddev;
-              normBytes[i++] = (inputData[i++] - mean) / stddev;
-              normBytes[i++] = (inputData[i++] - mean) / stddev;
             }
             // final normImage = normBytes.reshape([1, inputImage.width, inputImage.height, inputImage.numChannels]);
             return normBytes;
@@ -350,10 +408,8 @@ class InferenceService {
           // uniform scaling - simply normalize all pixels to be between 0 and 1, based on a given scale_param (usually 255)
           else if (method == "scale_div") {
             var value = step.params['value'] ?? 255.0;
-            for (var i = 0; i < inputData.length; i += 3) {
+            for (var i = 0; i < inputData.length; i++) {
               normBytes[i] = inputData[i] / value;
-              normBytes[i++] = inputData[i++] / value;
-              normBytes[i++] = inputData[i++] / value;
             }
             // final normImage = normBytes.reshape([1, inputImage.width, inputImage.height, inputImage.numChannels]);
             return normBytes;
@@ -588,7 +644,7 @@ class InferenceService {
       debugPrint("Executing postprocessing step: ${step.step}");
     }
 
-    switch (step.step) {
+    switch (step.step.toLowerCase()) {
       // applies an activation function to a list of values
       case 'apply_activation':
         // check that the current processed data is a List
@@ -618,16 +674,10 @@ class InferenceService {
 
       // map raw or activated outputs to a set of labels for classification
       case 'map_labels':
-        // load labels into memory
-        try {
-          final classificationLabels = await rootBundle.loadString(step.params['labels_url']);
-          _labels = classificationLabels.split('\n').map((label) => label.trim()).where((label) => label.isNotEmpty).toList();
-          if (kDebugMode) {
-            debugPrint("Successfully loaded ${_labels?.length} labels.");
-          }
-        }
-        catch (e) {
-          throw Exception("Failed fetching classification labels from $step.params['labels_url']: $e");
+        // check that labels are loaded
+        if (_labels == null) {
+          debugPrint("Labels not loaded, cannot map labels to output.");
+          return processedOutput;
         }
 
         // check whether task is classification or object detection
@@ -701,29 +751,6 @@ class InferenceService {
       // filters object detections by some threshold
       // expects a tensor, or a List<dynamic> in Dart
       case 'filter_by_score':
-/*         // check that the processed output is a list of floats
-        debugPrint("Validating that 'filter_by_score' input is a List");
-        if (processedOutput is! List) {
-          try {
-            debugPrint("Input to 'map_label' step isn't a List, trying to convert to List");
-            processedOutput = processedOutput.toList();
-          }
-          catch (e) {
-            throw FormatException("Processed output is not a List and cannot be converted to a List. Cannot map to classification labels.");
-          }
-        }
-        // declare tempOutput
-        List<dynamic> tempOutput = [];
-        // check if processedOutput is a nested list
-        debugPrint("Checking if processedOutput type = ${processedOutput.runtimeType} is a nested list.");
-        if (isNestedList(processedOutput)) {
-          debugPrint("Flattening processedOutput nested List.");
-          List<dynamic> flattenedProcessedOutput = processedOutput.expand((x) => x).toList();
-          tempOutput = flattenedProcessedOutput;
-        }
-        else {
-          tempOutput = processedOutput;
-        } */
         // find raw output using score_tensor param
         String scoreTensorName = step.params['score_tensor'];
         scoreTensor = outputTensors[scoreTensorName];

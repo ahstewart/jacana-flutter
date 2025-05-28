@@ -13,6 +13,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import '../../data_models/inference_result_model.dart';
 import '../../core/services/inferenceService.dart';
 import '../../core/data_models/pipeline.dart';
 import '../../core/utils/painters.dart';
@@ -62,6 +63,8 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
   ];
   Size _imageSize = Size.zero; // Store original image size for scaling boxes
 
+  late Future<void> _modelInitFuture;
+
   @override
   void initState() {
     super.initState();
@@ -69,9 +72,9 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
       modelPath: widget.modelName,
       pipelinePath: widget.pipelinePath
     );
-    if (kDebugMode) {
-      debugPrint("Initializing Object Detection Widget");
-    }
+    debugPrint("Initializing Object Detection Widget");
+    _modelInitFuture = inferenceObject.initialize();
+    debugPrint("Model initialized successfully.");
   }
     
 
@@ -89,9 +92,13 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
       debugPrint("Picking image...");
       final ImagePicker picker = ImagePicker();
       final XFile? image = await picker.pickImage(source: source);
+      if (image == null) {
+        debugPrint("No image selected.");
+        return;
+      }
       debugPrint("Image picked.");
       debugPrint("Decoding image so it can fed into model...");
-      File imageFile = File(image!.path);
+      File imageFile = File(image.path);
       _decodedImage = img.decodeImage(await imageFile.readAsBytes());
       _imageSize = Size(_decodedImage!.width.toDouble(), _decodedImage!.height.toDouble());
 
@@ -153,7 +160,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
     }
 
     // check that the inference resulted in actual outputs
-    if (inferenceResults.isNotEmpty) {
+    if (inferenceResults.isNotEmpty && inferenceResults is DetectionResult) {
       debugPrint("Inference results is not empty, trying to set the recognitions variable.");
       /*// use the inference results to update the UI
       List<Map<String, dynamic>> recognitions = inferenceResults.values.first;
@@ -213,6 +220,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
 
     if (result == null) {
       if (!inferenceObject.isReady && !_isLoading) {
+        debugPrint("inferenceObject readiness = ${inferenceObject.isReady}, _isLoading = $_isLoading");
         return const Padding(
             padding: EdgeInsets.all(16.0),
             child: Text("Model not loaded. Check logs.",
@@ -234,6 +242,28 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
 
   @override
   Widget build(BuildContext context) {
+    return FutureBuilder<void>(
+      future: _modelInitFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          // Model is still loading
+          return const Center(child: CircularProgressIndicator());
+        } else if (snapshot.hasError) {
+          // Model failed to load
+          return const Center(
+            child: Text(
+              "Model not loaded. Check logs.",
+              style: TextStyle(color: Colors.orange, fontSize: 16),
+            ),
+          );
+        }
+        // Model loaded successfully, show the rest of your widget
+        return _buildMainContent(context);
+      },
+    );
+  }
+
+  Widget _buildMainContent(BuildContext context) {
     // Get the size of the screen for calculating preview size
     final screenSize = MediaQuery.of(context).size;
     // Calculate a suitable size for the image preview, leaving padding
@@ -287,7 +317,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
                                       const Center(child: Text('Error loading image')),
                                 ),
                                 // Overlay Painter if results are available
-                                if (_recognitions!.isNotEmpty &&
+                                if (_recognitions != null && _recognitions!.isNotEmpty &&
                                     _imageSize != Size.zero)
                                   LayoutBuilder( // Use LayoutBuilder to get the exact size of the Stack area
                                     builder: (context, constraints) {
@@ -327,8 +357,8 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
                     ],
                   ),
                   const SizedBox(height: 30),
-                  // Display loading indicator or results summary/error
-                  _buildResultDisplay(),
+                  // // Display loading indicator or results summary/error
+                  // _buildResultDisplay(),
                   const SizedBox(height: 20),
                 ],
               ),

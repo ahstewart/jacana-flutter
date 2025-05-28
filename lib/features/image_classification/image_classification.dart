@@ -81,9 +81,13 @@ class _ImageClassificationWidgetState extends ConsumerState<ImageClassificationW
       debugPrint("Picking image...");
       final ImagePicker picker = ImagePicker();
       final XFile? image = await picker.pickImage(source: source);
+      if (image == null) {
+        debugPrint("No image selected.");
+        return;
+      }
       debugPrint("Image picked.");
       debugPrint("Decoding image so it can fed into model...");
-      File imageFile = File(image!.path);
+      File imageFile = File(image.path);
       _decodedImage = img.decodeImage(await imageFile.readAsBytes());
 
       setState(() {
