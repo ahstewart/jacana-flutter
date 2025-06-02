@@ -315,7 +315,7 @@ class InferenceService {
         return ErrorResult("Postprocessing for '$outputName' (classification) did not produce a List. Got ${currentResult.runtimeType}");
       case 'detection_boxes_scores_classes':
         if (currentResult is List) {
-          try { return DetectionResult(currentResult.cast<Map<String, dynamic>>()); }
+          try { return DetectionResult(currentResult.cast<List<Map<String, dynamic>>>()); }
           catch (e) { return ErrorResult("Postprocessing for '$outputName' (detection) produced a List, but elements were not Map<String, dynamic>."); }
         }
         return ErrorResult("Postprocessing for '$outputName' (detection) did not produce a List. Got ${currentResult.runtimeType}");

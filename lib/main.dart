@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 //import 'package:freezed_annotation/freezed_annotation.dart';
@@ -11,12 +13,21 @@ import 'dart:convert';
 import 'features/object_detection/object_detection.dart';
 
 
-// optional: Since our Person class is serializable, we must add this line.
-// But if Person was not serializable, we could skip it.
-//part 'main.g.dart';
+
 
 void main() {
-  runApp(ProviderScope(child: const MyApp()));
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details); // Still show red screen in debug
+    debugPrint('Caught by global error handler: ${details.exception}');
+    // Optionally, you can log details.stack as well
+  };
+  // This will catch all uncaught async errors
+  runZonedGuarded(() {
+    runApp(ProviderScope(child: const MyApp()));
+  }, (error, stackTrace) {
+    debugPrint('Uncaught async error: $error');
+    // Optionally log stackTrace
+  });
 }
 
 class MyApp extends StatelessWidget {

@@ -16,7 +16,7 @@ class ClassificationResult extends InferenceResult {
 }
 
 class DetectionResult extends InferenceResult {
-  final List<Map<String, dynamic>> results; // e.g., [{'rect': ..., 'label': ..., 'confidence': ...}]
+  final List<List<Map<String, dynamic>>> results; // e.g., [{'rect': ..., 'label': ..., 'confidence': ...}]
   DetectionResult(this.results);
 }
 

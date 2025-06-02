@@ -13,7 +13,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
-import '../../data_models/inference_result_model.dart';
+import '../../core/data_models/inference_result_model.dart';
 import '../../core/services/inferenceService.dart';
 import '../../core/data_models/pipeline.dart';
 import '../../core/utils/painters.dart';
@@ -52,8 +52,10 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
   List<Map<String, dynamic>>? _recognitions;
   // define the input map
   Map<String, dynamic> inputMap = {};
+  // define the detection result variable using the sealed DetectionResult class
+  late DetectionResult inferenceOutput;
   // define the final inference results map
-  Map<String, dynamic> inferenceResults = {};
+  List<Map<String, dynamic>> inferenceResults = [];
   // number of results displayed on the screen, default to 3
   int numResults = 3;
   // Colors for bounding boxes - cycle through them
@@ -134,7 +136,8 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
       }
 
       // run inference on selected image
-      inferenceResults = await inferenceObject.performInference(inputMap);
+      inferenceOutput = await inferenceObject.performInference(inputMap);
+      inferenceResults = inferenceOutput.results[0];
       if (kDebugMode) {
         debugPrint("Inference completed.");
         debugPrint("Inference results size: ${inferenceResults.length}");
@@ -160,7 +163,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
     }
 
     // check that the inference resulted in actual outputs
-    if (inferenceResults.isNotEmpty && inferenceResults is DetectionResult) {
+    if (inferenceResults.isNotEmpty) {
       debugPrint("Inference results is not empty, trying to set the recognitions variable.");
       /*// use the inference results to update the UI
       List<Map<String, dynamic>> recognitions = inferenceResults.values.first;
@@ -169,7 +172,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
       recognitions.sort((a,b) => (b['score'] as double).compareTo(a['score'] as double));*/
 
       List<Map<String, dynamic>> recognitions = [];
-      recognitions = inferenceResults.values.first.values.first;
+      recognitions = inferenceResults.first.values.first;
       if (kDebugMode) {
         developer.log("Inspecting final recognitions variable...");
         developer.inspect(recognitions);
