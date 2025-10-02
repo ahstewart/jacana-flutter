@@ -537,7 +537,7 @@ class InferenceService {
   // order of inferenceInputs will be mapped directly to the order of the pipeline inputs, so they must match
   // on the Flutter screen implementation
   // inferenceInputs is map keyed by the input name, so that the given input
-  Future<dynamic> performInference(Map<String, dynamic> inferenceInputs) async {
+  Future<Map<String, InferenceResult>> performInference(Map<String, dynamic> inferenceInputs) async {
     // check that the inputs provided match the inputs expected based on the pipeline file
     if (inferenceInputs.length != modelPipeline!.inputs.length) {
       throw ArgumentError("Provided number of inputs (${inferenceInputs.length}) and expected number of inputs ($modelPipeline!.inputs.length}) do not match, cannot proceed with inference.");
@@ -583,7 +583,7 @@ class InferenceService {
 
     // define the final results map, which will contain the final output from the model inference
     // the map is keyed by each postprocessing block's name and final output
-    Map<String, dynamic> finalResults = {};
+    Map<String, InferenceResult> finalResults = {};
 
     // check if any postprocessing blocks exist
     if (modelPipeline!.postprocessing.isNotEmpty) {
@@ -600,7 +600,7 @@ class InferenceService {
       if (kDebugMode) {
         debugPrint("No postprocessing blocks found in pipeline, returning raw output.");
       }
-      finalResults = inferenceOutputs;
+      finalResults = inferenceOutputs.map((key, value) => MapEntry(key, GenericDataResult(value)));
     }
 
     if (kDebugMode) {

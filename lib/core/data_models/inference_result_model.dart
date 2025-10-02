@@ -8,7 +8,13 @@ import 'package:flutter/foundation.dart'; // For kDebugMode
 import 'package:yaml/yaml.dart'; // For YAML parsing
 import 'dart:developer' as developer; // For inspect
 
-sealed class InferenceResult {}
+sealed class InferenceResult {
+  // Expose a generic results getter so callers can access `.results`.
+  // Concrete subclasses already define a `results` field whose implicit getter
+  // satisfies this abstract getter. Use `dynamic` so subclasses may return
+  // different types (lists, strings, etc.).
+  dynamic get results;
+}
 
 class ClassificationResult extends InferenceResult {
   final List<Map<String, dynamic>> results; // e.g., [{'label': ..., 'confidence': ...}]
@@ -23,6 +29,10 @@ class DetectionResult extends InferenceResult {
 class TextResult extends InferenceResult {
   final String text;
   TextResult(this.text);
+
+  // satisfy base getter even if not used for text
+  @override
+  String get results => text;
 }
 
 class SegmentationMaskResult extends InferenceResult {
@@ -31,14 +41,26 @@ class SegmentationMaskResult extends InferenceResult {
   final int height;
   final int width;
   SegmentationMaskResult(this.maskData, this.height, this.width);
+
+  // satisfy base getter even if not used for text
+  @override
+  String get results => maskData;
 }
 
 class ErrorResult extends InferenceResult {
   final String errorMessage;
   ErrorResult(this.errorMessage);
+
+  // satisfy base getter even if not used for text
+  @override
+  String get results => errorMessage;
 }
 
 class GenericDataResult extends InferenceResult {
   final dynamic data; // Can be any type of data
   GenericDataResult(this.data);
+
+  // satisfy base getter even if not used for text
+  @override
+  String get results => data;
 }

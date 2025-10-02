@@ -53,7 +53,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
   // define the input map
   Map<String, dynamic> inputMap = {};
   // define the detection result variable using the sealed DetectionResult class
-  late DetectionResult inferenceOutput;
+  late Map<String, InferenceResult> inferenceOutput;
   // define the final inference results map
   List<Map<String, dynamic>> inferenceResults = [];
   // number of results displayed on the screen, default to 3
@@ -137,7 +137,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
 
       // run inference on selected image
       inferenceOutput = await inferenceObject.performInference(inputMap);
-      inferenceResults = inferenceOutput.results[0];
+      inferenceResults = inferenceOutput[inferenceOutput.keys.toList().first]!.results[0];
       if (kDebugMode) {
         debugPrint("Inference completed.");
         debugPrint("Inference results size: ${inferenceResults.length}");
