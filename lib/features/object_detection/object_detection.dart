@@ -55,7 +55,8 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
   // define the detection result variable using the sealed DetectionResult class
   late Map<String, InferenceResult> inferenceOutput;
   // define the final inference results map
-  List<Map<String, dynamic>> inferenceResults = [];
+  DetectionResult inferenceResults = DetectionResult({});
+  List<Map<String, dynamic>> primeDetectionResult = [];
   // number of results displayed on the screen, default to 3
   int numResults = 3;
   // Colors for bounding boxes - cycle through them
@@ -137,11 +138,28 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
 
       // run inference on selected image
       inferenceOutput = await inferenceObject.performInference(inputMap);
-      inferenceResults = inferenceOutput[inferenceOutput.keys.toList().first]!.results[0];
+      if (kDebugMode) {
+        debugPrint("Raw inference output type (inferenceOutput): ${inferenceOutput.runtimeType}");
+        developer.inspect(inferenceOutput);
+      }
+
+      if (inferenceOutput[inferenceOutput.keys.toList().first] is DetectionResult) {
+        inferenceResults = inferenceOutput[inferenceOutput.keys.toList().first] as DetectionResult;
+        primeDetectionResult = inferenceResults.results[0] ?? [];
+      }
+      else {
+        if (kDebugMode) {
+          debugPrint("Inference Error: Final inference result is not DetectionResult.");
+        }
+        setState(() {
+          _recognitions = [];
+        });
+        primeDetectionResult = [];
+      }
       if (kDebugMode) {
         debugPrint("Inference completed.");
-        debugPrint("Inference results size: ${inferenceResults.length}");
-        debugPrint("Inference results type: ${inferenceResults.runtimeType}");
+        debugPrint("Inference results size: ${primeDetectionResult.length}");
+        debugPrint("Inference results type: ${primeDetectionResult.runtimeType}");
         developer.log("Inspecting final inferenceResults in Object Detection widget...");       
         developer.inspect(inferenceResults);
       }
@@ -152,7 +170,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
         debugPrint("Error running inference: $e");
       }
       setState(() {
-        _recognitions = [{"label": "Error", "confidence": "Could not get confidence"}];
+        _recognitions = [];
       }); 
     }
 
@@ -163,7 +181,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
     }
 
     // check that the inference resulted in actual outputs
-    if (inferenceResults.isNotEmpty) {
+    if (primeDetectionResult.isNotEmpty) {
       debugPrint("Inference results is not empty, trying to set the recognitions variable.");
       /*// use the inference results to update the UI
       List<Map<String, dynamic>> recognitions = inferenceResults.values.first;
@@ -172,7 +190,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
       recognitions.sort((a,b) => (b['score'] as double).compareTo(a['score'] as double));*/
 
       List<Map<String, dynamic>> recognitions = [];
-      recognitions = inferenceResults.first.values.first;
+      recognitions = primeDetectionResult;
       if (kDebugMode) {
         developer.log("Inspecting final recognitions variable...");
         developer.inspect(recognitions);
@@ -183,12 +201,9 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
       });
     }
     else {
-      debugPrint("Inference results are empty. Setting recognitions to an empty map.");
+      debugPrint("Inference results are empty. Setting recognitions to an empty list.");
       setState(() {
-        _recognitions = [{"original_index": 0, 
-                          "score": 0.0,
-                          "raw_box": [0,0,0,0],
-                          "label": "Error running model",}];
+        _recognitions = [];
       });
     }
 
@@ -208,38 +223,6 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
     catch (e) {
       debugPrint("Error setting numResults, maybe it's not in the pipeline YAML. Using default value of 3.");
     }
-  }
-
-  // Helper Widget to Display Results Based on the Sealed Result Type
-  Widget _buildResultDisplay() {
-    final result = _recognitions;
-
-    if (_isLoading) {
-      return const Padding(
-        padding: EdgeInsets.all(16.0),
-        child: CircularProgressIndicator(),
-      );
-    }
-
-    if (result == null) {
-      if (!inferenceObject.isReady && !_isLoading) {
-        debugPrint("inferenceObject readiness = ${inferenceObject.isReady}, _isLoading = $_isLoading");
-        return const Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Text("Model not loaded. Check logs.",
-                style: TextStyle(color: Colors.orange, fontSize: 16)));
-      }
-      return Container(height: 50); // Placeholder
-    }
-
-    return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 15.0, vertical: 10.0),
-          child: Text(
-              'Detected ${_recognitions?.length} objects above threshold.',
-              style: Theme.of(context).textTheme.bodyLarge,
-            ),
-          // Note: The actual boxes are drawn by the CustomPainter in the Stack
-        );
   }
 
 
@@ -292,7 +275,7 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
                 children: <Widget>[
                   const SizedBox(height: 20),
                   // --- Image Display Area with Stack for Overlays ---
-                  Container(
+ Container(
                     constraints: BoxConstraints( // Constrain the preview size
                       maxWidth: previewWidth,
                       maxHeight: previewHeight,
@@ -307,36 +290,47 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
                         : ClipRRect( // Clip contents to rounded border
                             borderRadius: BorderRadius.circular(11.0),
                             child: Stack(
-                              // Use a key to ensure the Stack rebuilds if image changes,
-                              // which can help ensure LayoutBuilder gets correct constraints.
                               key: ValueKey(_selectedImage?.path),
-                              fit: StackFit.expand, // Make stack fill the container
+                              fit: StackFit.expand,
                               children: [
                                 // Base Image
                                 Image.file(
                                   _selectedImage!,
-                                  fit: BoxFit.contain, // Use contain to see the whole image
+                                  fit: BoxFit.contain,
                                   errorBuilder: (context, error, stackTrace) =>
                                       const Center(child: Text('Error loading image')),
                                 ),
                                 // Overlay Painter if results are available
                                 if (_recognitions != null && _recognitions!.isNotEmpty &&
                                     _imageSize != Size.zero)
-                                  LayoutBuilder( // Use LayoutBuilder to get the exact size of the Stack area
+                                  LayoutBuilder(
                                     builder: (context, constraints) {
-                                      // Ensure constraints are valid before painting
                                       if (constraints.maxWidth.isFinite && constraints.maxHeight.isFinite) {
                                         return CustomPaint(
                                           painter: DetectionBoxPainter(
                                             recognitions: _recognitions ?? [],
                                             originalImageSize: _imageSize,
-                                            previewSize: constraints.biggest, // Use actual rendered size
+                                            previewSize: constraints.biggest,
                                             boxColors: _boxColors,
                                           ),
                                         );
                                       }
                                       return const SizedBox.shrink(); // Don't paint if constraints are bad
                                     }
+                                  ),
+                                  if (_recognitions != null && _recognitions!.isEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 12.0, bottom: 8.0),
+                                      child: Center(
+                                        child: Text(
+                                          'Model inference failed.',
+                                          style: TextStyle(
+                                            color: const Color.fromARGB(255, 247, 57, 57),
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
                                   ),
                               ],
                             ),

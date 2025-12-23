@@ -314,11 +314,14 @@ class InferenceService {
         }
         return ErrorResult("Postprocessing for '$outputName' (classification) did not produce a List. Got ${currentResult.runtimeType}");
       case 'detection_boxes_scores_classes':
-        if (currentResult is List) {
-          try { return DetectionResult(currentResult.cast<List<Map<String, dynamic>>>()); }
-          catch (e) { return ErrorResult("Postprocessing for '$outputName' (detection) produced a List, but elements were not Map<String, dynamic>."); }
+        if (currentResult is Map<int, List<Map<String, dynamic>>>) {
+          try { return ErrorResult("test"); }
+          catch (e) { return ErrorResult("Postprocessing for '$outputName' (detection) produced a Map<int, List<Map<String, dynamic>>> but failed to cast."); }
+        } else if (currentResult is List && currentResult.isNotEmpty && currentResult.first is Map<int, List<Map<String, dynamic>>>) {
+          try { return DetectionResult(currentResult.first as Map<int, List<Map<String, dynamic>>>); }
+          catch (e) { return ErrorResult("Postprocessing for '$outputName' (detection) produced a List, but elements were not Map<int, List<Map<String, dynamic>>>."); }
         }
-        return ErrorResult("Postprocessing for '$outputName' (detection) did not produce a List. Got ${currentResult.runtimeType}");
+        return ErrorResult("Postprocessing for '$outputName' (detection) did not produce a Map<int, List<Map<String, dynamic>>>. Got ${currentResult.runtimeType}");
       case 'text_generation':
             if (currentResult is String) { return TextResult(currentResult); }
             return ErrorResult("Postprocessing for '$outputName' (text) did not produce a String. Got ${currentResult.runtimeType}");

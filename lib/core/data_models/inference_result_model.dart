@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart'; // For kDebugMode
 import 'package:yaml/yaml.dart'; // For YAML parsing
 import 'dart:developer' as developer; // For inspect
 
-sealed class InferenceResult {
+sealed class InferenceResult extends Object {
   // Expose a generic results getter so callers can access `.results`.
   // Concrete subclasses already define a `results` field whose implicit getter
   // satisfies this abstract getter. Use `dynamic` so subclasses may return
@@ -22,7 +22,7 @@ class ClassificationResult extends InferenceResult {
 }
 
 class DetectionResult extends InferenceResult {
-  final List<List<Map<String, dynamic>>> results; // e.g., [{'rect': ..., 'label': ..., 'confidence': ...}]
+  final Map<int, List<Map<String, dynamic>>> results; // e.g., [{'rect': ..., 'label': ..., 'confidence': ...}]
   DetectionResult(this.results);
 }
 
@@ -49,7 +49,11 @@ class SegmentationMaskResult extends InferenceResult {
 
 class ErrorResult extends InferenceResult {
   final String errorMessage;
-  ErrorResult(this.errorMessage);
+  ErrorResult(this.errorMessage) {
+    if (kDebugMode) {
+      developer.log("Inference Error: $errorMessage");
+    }
+  }
 
   // satisfy base getter even if not used for text
   @override
