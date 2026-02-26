@@ -8,12 +8,11 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'features/image_classification/image_classification.dart';
 import 'core/services/inferenceService.dart';
 import 'core/data_models/pipeline.dart';
+import 'core/data_models/api_models.dart';
+import 'core/providers/model_providers.dart';
 import 'package:yaml/yaml.dart';
 import 'dart:convert';
 import 'features/object_detection/object_detection.dart';
-
-
-
 
 void main() {
   FlutterError.onError = (FlutterErrorDetails details) {
@@ -22,12 +21,15 @@ void main() {
     // Optionally, you can log details.stack as well
   };
   // This will catch all uncaught async errors
-  runZonedGuarded(() {
-    runApp(ProviderScope(child: const MyApp()));
-  }, (error, stackTrace) {
-    debugPrint('Uncaught async error: $error');
-    // Optionally log stackTrace
-  });
+  runZonedGuarded(
+    () {
+      runApp(ProviderScope(child: const MyApp()));
+    },
+    (error, stackTrace) {
+      debugPrint('Uncaught async error: $error');
+      // Optionally log stackTrace
+    },
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -39,10 +41,12 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Pocket AI',
       theme: ThemeData(
-      primarySwatch: Colors.indigo,
+        primarySwatch: Colors.indigo,
         visualDensity: VisualDensity.adaptivePlatformDensity,
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color.fromARGB(255, 23, 148, 12)),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color.fromARGB(255, 23, 148, 12),
+        ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.indigo[700],
@@ -57,115 +61,307 @@ class MyApp extends StatelessWidget {
   }
 }
 
-
-// a Model class using freezed
-class Model {
-  final dynamic name;
-  final dynamic description;
-  final dynamic pipelineTag;
-  final dynamic likes;
-
-
-  const Model({required this.name, 
-                required this.description,
-                required this.pipelineTag, 
-                required this.likes,
-              }
-  );
-  
-  //factory Model.fromJson(Map<String, Object?> json) => _$ModelFromJson(json);
-
-}
-
-final selectedModelProvider = StateProvider<Model>((ref) {
-  Model selectedModel = Model(name: '', description: '', pipelineTag: '', likes: 0);
-  return selectedModel;
+final selectedModelProvider = StateProvider<MLModel?>((ref) {
+  return null;
 });
-
-// riverpod provider for the model class
-final modelProvider = Provider<List<Model>>((ref) {
-  return const [
-    Model(
-      name: 'yourmom/Moball_TFLite_2244',
-      description: 'A small MobileNetV4 model for image classification',
-      pipelineTag: 'image-classification',
-      likes: 10,),
-    Model(
-      name: 'astewart/sweetmodel',
-      description: '',
-      pipelineTag: 'text-to-image',
-      likes: 4,),
-    Model(
-      name: 'someone/lamemodel',
-      description: '',
-      pipelineTag: 'text-classification',
-      likes: 0,),
-    Model(
-      name: 'byoussef/MobileNetV4_Conv_Small_TFLite_224',
-      description: 'Image classification model optimized for mobile',
-      pipelineTag: 'image-classification',
-      likes: 1,),
-  ];
-});
-
 
 // Widget containing the model tile list
 class Models extends ConsumerWidget {
   const Models({super.key});
 
-  static final Map model1 = {
-  'name': 'yourmom/Moball_TFLite_224',
-  'description': '',
-  'pipeline_tag': 'text-to-text',
-  'likes': 10
-  };
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final modelsAsync = ref.watch(supportedModelsProvider);
 
-  static final Map model3 = {
-  'name': 'astewart/sweetmodel',
-  'description': '',
-  'pipeline_tag': 'text-to-image',
-  'likes': 4
-  };
+    return modelsAsync.when(
+      data: (modelList) {
+        if (modelList.isEmpty) {
+          return const Center(child: Text('No supported models available'));
+        }
 
-  static final Map model2 = {
-  'name': 'someone/lamemodel',
-  'description': '',
-  'pipeline_tag': 'text-classification',
-  'likes': 0
-  };
+        return Wrap(
+          spacing: 16.0,
+          runSpacing: 16.0,
+          children: [
+            for (MLModel model in modelList)
+              SizedBox(
+                width: 300,
+                child: Card(
+                  child: ListTile(
+                    title: Text(model.name),
+                    subtitle: Text(model.category),
+                    leading: const Icon(Icons.model_training),
+                    onTap: () {
+                      ref.read(selectedModelProvider.notifier).state = model;
+                      ref.read(selectedIndexProvider.notifier).state = 1;
+                    },
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (err, stack) => Center(child: Text('Error loading models: $err')),
+    );
+  }
+}
 
-   static final Map model4 = {
-  'name': 'byoussef/MobileNetV4_Conv_Small_TFLite_224',
-  'description': 'Image classification model optimized for mobile',
-  'pipeline_tag': 'image-classification',
-  'likes': 1
-  };
-
-  
-
-  //final List modelList = [model1, model2, model3];
+// widget for the model range
+class ModelRange extends ConsumerWidget {
+  const ModelRange({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final modelList = ref.watch(modelProvider);
+    final selectedModel = ref.watch(selectedModelProvider);
 
-    return Wrap(
-      spacing: 16.0,
-      runSpacing: 16.0,
-      children: [
-        for (Model m in modelList)
-          SizedBox(
-            width: 300, // Set a fixed width for each card to mimic grid tiles
-            child: Card(
-              child: ListTile(
-                title: Text(m.name),
-                subtitle: Text(m.pipelineTag),
-                leading: Icon(Icons.image),
-                onTap: () {
-                  ref.read(selectedModelProvider.notifier).state = m;
-                  ref.read(selectedIndexProvider.notifier).state = 1;
-                },
+    // check if no model has been selected
+    if (selectedModel == null) {
+      return const Center(child: Text('Select a model to view details!'));
+    }
+
+    // Fetch versions for the selected model
+    final versionsAsync = ref.watch(modelVersionsProvider(selectedModel.id));
+
+    return versionsAsync.when(
+      data: (versions) {
+        // Filter to only supported versions
+        final supportedVersions =
+            versions.where((v) => v.is_supported).toList();
+
+        if (supportedVersions.isEmpty) {
+          return const Center(
+            child: Text('No supported versions available for this model'),
+          );
+        }
+
+        return SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    ref.read(selectedModelProvider.notifier).state = null;
+                    ref.read(selectedIndexProvider.notifier).state = 0;
+                  },
+                  child: const Text('Back to Model List'),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Model: ${selectedModel.name}',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 8),
+                Text('Description: ${selectedModel.description}'),
+                Text('Category: ${selectedModel.category}'),
+                Text('Total Downloads: ${selectedModel.total_download_count}'),
+                const SizedBox(height: 16),
+                Text(
+                  'Supported Versions (${supportedVersions.length})',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 12),
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: supportedVersions.length,
+                  itemBuilder: (context, index) {
+                    final version = supportedVersions[index];
+                    return VersionCard(
+                      version: version,
+                      modelName: selectedModel.name,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error:
+          (err, stack) => Center(child: Text('Error loading versions: $err')),
+    );
+  }
+}
+
+// Widget to display individual version details
+class VersionCard extends ConsumerWidget {
+  final ModelVersion version;
+  final String modelName;
+
+  const VersionCard({
+    required this.version,
+    required this.modelName,
+    super.key,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Version: ${version.version_name}',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
+            Text('Status: ${version.status}'),
+            Text('License: ${version.license_type}'),
+            Text(
+              'File Size: ${(version.file_size_bytes / 1024 / 1024).toStringAsFixed(2)} MB',
+            ),
+            Text('Downloads: ${version.download_count}'),
+            const SizedBox(height: 12),
+            if (version.pipeline_spec != null)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Pipeline Configuration:',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  PipelineConfigDisplay(config: version.pipeline_spec!),
+                  const SizedBox(height: 12),
+                ],
               ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () {
+                    _showDownloadDialog(context, version, modelName);
+                  },
+                  icon: const Icon(Icons.download),
+                  label: const Text('Download Model'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    ref
+                        .read(selectedModelVersionProvider.notifier)
+                        .setVersion(version);
+                  },
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Use Model'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDownloadDialog(
+    BuildContext context,
+    ModelVersion version,
+    String modelName,
+  ) {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Download Model'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Model: $modelName'),
+                Text('Version: ${version.version_name}'),
+                const SizedBox(height: 12),
+                const Text('Download includes:'),
+                const SizedBox(height: 8),
+                Text('• TFLite Model: ${version.assets.tflite}'),
+                if (version.assets.labels != null)
+                  Text('• Labels: ${version.assets.labels}'),
+                if (version.assets.anchors != null)
+                  Text('• Anchors: ${version.assets.anchors}'),
+                const SizedBox(height: 12),
+                const Text('Pipeline Config:'),
+                const SizedBox(height: 8),
+                if (version.pipeline_spec != null)
+                  Text(
+                    '${version.pipeline_spec!.preprocessing.length} preprocessing step(s)\n${version.pipeline_spec!.postprocessing.length} postprocessing step(s)',
+                  ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  // Implement download logic here
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Download started... (To be implemented)'),
+                    ),
+                  );
+                  Navigator.pop(context);
+                },
+                child: const Text('Download'),
+              ),
+            ],
+          ),
+    );
+  }
+}
+
+// Widget to display pipeline configuration details
+class PipelineConfigDisplay extends StatelessWidget {
+  final PipelineConfig config;
+
+  const PipelineConfigDisplay({required this.config, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Inputs: ${config.inputs.length}',
+          style: const TextStyle(fontSize: 12),
+        ),
+        for (var input in config.inputs)
+          Padding(
+            padding: const EdgeInsets.only(left: 16.0),
+            child: Text(
+              '• ${input.name} [${input.shape.join(',')}}] - ${input.dtype}',
+              style: const TextStyle(fontSize: 10),
+            ),
+          ),
+        const SizedBox(height: 8),
+        Text(
+          'Preprocessing: ${config.preprocessing.length} block(s)',
+          style: const TextStyle(fontSize: 12),
+        ),
+        for (var block in config.preprocessing)
+          Padding(
+            padding: const EdgeInsets.only(left: 16.0),
+            child: Text(
+              '• ${block.input_name} (${block.steps.length} steps)',
+              style: const TextStyle(fontSize: 10),
+            ),
+          ),
+        const SizedBox(height: 8),
+        Text(
+          'Postprocessing: ${config.postprocessing.length} block(s)',
+          style: const TextStyle(fontSize: 12),
+        ),
+        for (var block in config.postprocessing)
+          Padding(
+            padding: const EdgeInsets.only(left: 16.0),
+            child: Text(
+              '• ${block.output_name} (${block.interpretation})',
+              style: const TextStyle(fontSize: 10),
             ),
           ),
       ],
@@ -173,75 +369,7 @@ class Models extends ConsumerWidget {
   }
 }
 
-
-
-// widget for the model range
-class ModelRange extends ConsumerWidget {
-  const ModelRange({super.key});
-
-  dynamic _convertYamlToJson(dynamic yaml) {
-    if (yaml is YamlMap) {
-      return yaml.map((k, v) => MapEntry(k.toString(), _convertYamlToJson(v)));
-    }
-    if (yaml is YamlList) {
-      return yaml.map((e) => _convertYamlToJson(e)).toList();
-    }
-    return yaml;
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final selectedModel = ref.watch(selectedModelProvider);
-    
-    // check if no model has been selected
-    if ((selectedModel.name == '') && (selectedModel.pipelineTag == '') && (selectedModel.description == 0)) {
-      return Text('Select a model to check out the range!');
-    }
-
-    // check if the selected model is the one we've built inference for
-    else if (selectedModel.name == "byoussef/MobileNetV4_Conv_Small_TFLite_224") {
-      String metadataPath = 'assets/mobilenet_imageclass.yaml';
-      String modelPath = 'assets/mobilenetv4_conv_small.e2400_r224_in1k_float32.tflite';
-      //final yamlMap = loadYaml(metadataPath);
-      //final jsonMap = _convertYamlToJson(yamlMap);
-      return ImageClassificationWidget(
-        modelName: modelPath,
-        pipelinePath: metadataPath,
-      );
-    }
-
-      // check if the selected model is the one we've built inference for
-    else if (selectedModel.name == "someone/lamemodel") {
-      String metadataPath = 'assets/mobilenet_objectdetect.yaml';
-      String modelPath = 'assets/ssd_mobilenet_v1_objectdetection.tflite';
-      //final yamlMap = loadYaml(metadataPath);
-      //final jsonMap = _convertYamlToJson(yamlMap);
-      return ObjectDetectionWidget(
-        modelName: modelPath,
-        pipelinePath: metadataPath,
-      );
-    }
-    
-    //if model has been selected, show the model range
-    return Column(
-        children: [
-          ElevatedButton(
-            onPressed: () {
-              ref.read(selectedIndexProvider.notifier).state = 0;
-            },
-            child: Text('Back to Model List Yo!'),
-          ),
-          Text("You're looking at the model range for: "),
-          Text('Model Name: ${selectedModel.name}'),
-          Text('Pipeline Tag: ${selectedModel.pipelineTag}'),
-          Text('Likes: ${selectedModel.likes}'),
-        ],
-      );
-    }
-  }
-
-
-// widget for the user 
+// widget for the user
 class Profile extends StatelessWidget {
   const Profile({super.key});
 
@@ -255,7 +383,6 @@ class Profile extends StatelessWidget {
 final selectedIndexProvider = StateProvider<int>((ref) {
   return 0;
 });
-
 
 class ModelList extends ConsumerStatefulWidget {
   const ModelList({super.key, required this.title});
@@ -281,11 +408,7 @@ class _ModelList extends ConsumerState<ModelList> {
   @override
   void initState() {
     super.initState();
-    pages = [
-      Models(),
-      ModelRange(),
-      Profile(),
-    ];
+    pages = [Models(), ModelRange(), Profile()];
   }
 
   @override
@@ -326,31 +449,30 @@ class _ModelList extends ConsumerState<ModelList> {
           // wireframe for each widget.
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            Expanded(child: pages[_selectedIndex],
-          ),
-            
+            Expanded(child: pages[_selectedIndex]),
+
             // This is the nav bar
-            SafeArea(child: NavigationBar(destinations: [
-                NavigationDestination(
-                  icon: Icon(Icons.home),
-                  label: 'Home',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.science),
-                  label: 'Range',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.person),
-                  label: 'Profile',
-                ),
-              ], 
-              selectedIndex: _selectedIndex,
-              onDestinationSelected: (int index) {
-                setState(() {
-                  ref.read(selectedIndexProvider.notifier).state = index;
-                });
-              },
-            ))
+            SafeArea(
+              child: NavigationBar(
+                destinations: [
+                  NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
+                  NavigationDestination(
+                    icon: Icon(Icons.science),
+                    label: 'Range',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.person),
+                    label: 'Profile',
+                  ),
+                ],
+                selectedIndex: _selectedIndex,
+                onDestinationSelected: (int index) {
+                  setState(() {
+                    ref.read(selectedIndexProvider.notifier).state = index;
+                  });
+                },
+              ),
+            ),
           ],
         ),
       ), // This trailing comma makes auto-formatting nicer for build methods.

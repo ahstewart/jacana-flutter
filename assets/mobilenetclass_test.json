@@ -1,0 +1,119 @@
+{
+  "config": {
+    "inputs": [
+      {
+        "name": "input_1",
+        "dtype": "float32",
+        "shape": [
+          1,
+          224,
+          224,
+          3
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "output_0",
+        "dtype": "float32",
+        "shape": [
+          1,
+          1000
+        ]
+      }
+    ],
+    "metadata": [
+      {
+        "framework": "tflite",
+        "model_name": "MobileNetV4 image classifier",
+        "model_task": "image-classification",
+        "model_version": "mobilenetv4_conv_small.e2400_r224_in1k",
+        "schema_version": "1.0.0",
+        "source_repository": "https://huggingface.co/timm/mobilenetv4_conv_small.e2400_r224_in1k"
+      }
+    ],
+    "preprocessing": [
+      {
+        "steps": [
+          {
+            "step": "resize_image",
+            "params": {
+              "width": 224,
+              "height": 224,
+              "method": "bilinear"
+            }
+          },
+          {
+            "step": "format",
+            "params": {
+              "color_space": "RGB",
+              "data_layout": "NHWC",
+              "target_dtype": "float32"
+            }
+          },
+          {
+            "step": "normalize",
+            "params": {
+              "mean": null,
+              "scale": 0.00392156862745098,
+              "shift": 0,
+              "method": "scale_shift",
+              "stddev": null,
+              "color_space": "RGB"
+            }
+          },
+          {
+            "step": "normalize",
+            "params": {
+              "mean": [
+                0.485,
+                0.456,
+                0.406
+              ],
+              "scale": null,
+              "shift": null,
+              "method": "mean_stddev",
+              "stddev": [
+                0.229,
+                0.224,
+                0.225
+              ],
+              "color_space": "RGB"
+            }
+          }
+        ],
+        "input_name": "input_1",
+        "expects_type": "image"
+      }
+    ],
+    "postprocessing": [
+      {
+        "steps": [
+          {
+            "step": "apply_activation",
+            "params": {
+              "function": "softmax"
+            }
+          },
+          {
+            "step": "map_labels",
+            "params": {
+              "top_k": 5,
+              "labels_url": "imagenet_classes.txt",
+              "class_tensor": "output_0",
+              "label_offset": 0
+            }
+          }
+        ],
+        "output_name": "image_classification",
+        "interpretation": "classification_scores",
+        "source_tensors": [
+          "output_0"
+        ],
+        "coordinate_format": null
+      }
+    ]
+  },
+  "reasoning": "The model is a standard image classification model with clearly defined input/output tensors and common preprocessing (resize, normalization) and postprocessing (softmax, top-k, label mapping) steps that fit the schema perfectly.",
+  "is_supported": true
+}
