@@ -17,11 +17,13 @@ sealed class InferenceResult extends Object {
 }
 
 class ClassificationResult extends InferenceResult {
+  @override
   final List<Map<String, dynamic>> results; // e.g., [{'label': ..., 'confidence': ...}]
   ClassificationResult(this.results);
 }
 
 class DetectionResult extends InferenceResult {
+  @override
   final Map<int, List<Map<String, dynamic>>> results; // e.g., [{'rect': ..., 'label': ..., 'confidence': ...}]
   DetectionResult(this.results);
 }

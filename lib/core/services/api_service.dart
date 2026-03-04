@@ -127,6 +127,28 @@ class ApiService {
     }
   }
 
+  /// Download a model asset through the backend's telemetry endpoint.
+  /// The backend increments download counts then issues a 307 redirect to the
+  /// storage provider (Hugging Face / S3). The http client follows the redirect
+  /// transparently and returns the final binary bytes.
+  Future<List<int>> downloadAsset(String versionId, String assetKey) async {
+    try {
+      final uri = Uri.parse('$baseUrl/versions/$versionId/download/$assetKey');
+      final response = await _httpClient.get(uri);
+
+      if (response.statusCode == 200) {
+        return response.bodyBytes;
+      } else {
+        throw Exception(
+          'Failed to download asset "$assetKey": ${response.statusCode}',
+        );
+      }
+    } catch (e) {
+      debugPrint('Error downloading asset "$assetKey" for version $versionId: $e');
+      rethrow;
+    }
+  }
+
   void dispose() {
     _httpClient.close();
   }

@@ -15,32 +15,38 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../core/services/inferenceService.dart';
 import '../../core/data_models/pipeline.dart';
- 
+import '../../core/data_models/inference_result_model.dart';
 
 // file purpose: this is the main widget for image classification, it will facilitate the capturing of images and running the inference of a model
 // on the captured image. The widget will also display the results of the inference.
-var modelNameReal = 'assets/mobilenetv4_conv_small.e2400_r224_in1k_float32.tflite';
+var modelNameReal =
+    'assets/mobilenetv4_conv_small.e2400_r224_in1k_float32.tflite';
 var pipelinePathReal = 'assets/metadata/mobilenet_imageclass.yaml';
 var labelName = 'assets/imagenet_classes.txt';
 
-
-// to generalize the image classification task, we need the image classification widget to accept the model metadata 
+// to generalize the image classification task, we need the image classification widget to accept the model metadata
 
 class ImageClassificationWidget extends ConsumerStatefulWidget {
   final String pipelinePath;
   final String modelName;
-  
+  final bool isLocalFile;
+  final String? localDir;
+
   const ImageClassificationWidget({
-    super.key, 
+    super.key,
     required this.modelName,
     required this.pipelinePath,
+    this.isLocalFile = false,
+    this.localDir,
   });
 
   @override
-  ConsumerState<ImageClassificationWidget> createState() => _ImageClassificationWidgetState();
+  ConsumerState<ImageClassificationWidget> createState() =>
+      _ImageClassificationWidgetState();
 }
 
-class _ImageClassificationWidgetState extends ConsumerState<ImageClassificationWidget> {
+class _ImageClassificationWidgetState
+    extends ConsumerState<ImageClassificationWidget> {
   // instantiate the model inference object
   late final InferenceService inferenceObject;
   bool _isLoading = false;
@@ -54,28 +60,33 @@ class _ImageClassificationWidgetState extends ConsumerState<ImageClassificationW
   // number of results displayed on the screen, default to 3
   int numResults = 3;
 
+  Future<void>? _modelInitFuture;
+
   @override
   void initState() {
     super.initState();
     inferenceObject = InferenceService(
       modelPath: widget.modelName,
-      pipelinePath: widget.pipelinePath
+      pipelinePath: widget.pipelinePath,
+      isLocalFile: widget.isLocalFile,
+      localDir: widget.localDir,
     );
     if (kDebugMode) {
       debugPrint("Initializing Image Classification Widget");
     }
+    _modelInitFuture = inferenceObject.initialize();
   }
-    
 
-  @override dispose() {
+  @override
+  dispose() {
     inferenceObject.dispose();
     super.dispose();
   }
 
-
-// enable the selection of images
+  // enable the selection of images
   Future<void> _pickImage(ImageSource source) async {
-    if (_isLoading) return; // can't pick an image if inference is currently happening
+    if (_isLoading)
+      return; // can't pick an image if inference is currently happening
 
     try {
       debugPrint("Picking image...");
@@ -94,9 +105,7 @@ class _ImageClassificationWidgetState extends ConsumerState<ImageClassificationW
         _selectedImage = imageFile;
         _recognitions = null;
       });
-    }
-
-    catch (e) {
+    } catch (e) {
       if (kDebugMode) {
         debugPrint("Failed to pick image: $e");
       }
@@ -107,7 +116,9 @@ class _ImageClassificationWidgetState extends ConsumerState<ImageClassificationW
       // check that the inference object is initialized and ready
       if (!inferenceObject.isReady) {
         if (kDebugMode) {
-          debugPrint("Could not run inference on image, interpreter or labels haven't been loaded.");
+          debugPrint(
+            "Could not run inference on image, interpreter or labels haven't been loaded.",
+          );
         }
         return;
       }
@@ -123,148 +134,199 @@ class _ImageClassificationWidgetState extends ConsumerState<ImageClassificationW
 
       // run inference on selected image
       inferenceResults = await inferenceObject.performInference(inputMap);
-    }
-
-    catch (e) {
+    } catch (e) {
       if (kDebugMode) {
         debugPrint("Error running inference: $e");
       }
       setState(() {
-        _recognitions = [{"label": "Error", "confidence": "Could not get confidence"}];
+        _recognitions = [
+          {"label": "Error", "confidence": "Could not get confidence"},
+        ];
       });
-    }
-
-    finally {
+    } finally {
       setState(() {
         _isLoading = false;
       });
     }
 
     // check that the inference resulted in actual outputs
-    if (inferenceResults.isNotEmpty && inferenceResults.values.first != null) {
+    final firstResult = inferenceResults.isNotEmpty ? inferenceResults.values.first : null;
+    if (firstResult is ClassificationResult) {
       // use the inference results to update the UI
-      List<Map<String, dynamic>> recongnitions = inferenceResults.values.first;
+      List<Map<String, dynamic>> recongnitions = firstResult.results;
       // reorder the final recognitions by highest probability first
       recongnitions.removeWhere((r) => r['confidence'] == null);
-      recongnitions.sort((a,b) => (b['confidence'] as double).compareTo(a['confidence'] as double));
+      recongnitions.sort(
+        (a, b) =>
+            (b['confidence'] as double).compareTo(a['confidence'] as double),
+      );
 
       setState(() {
         _recognitions = recongnitions;
       });
-    }
-    else {
+    } else {
       setState(() {
-        _recognitions = [{"label": "Error running model", "confidence": 0.0}];
+        _recognitions = [
+          {"label": "Error running model", "confidence": 0.0},
+        ];
       });
     }
 
     // try to set the numResults to a custom value, if it's included in the pipeline YAML
-    debugPrint("Trying to set the numResults to a custom value, if it's included in the pipeline YAML.");
+    debugPrint(
+      "Trying to set the numResults to a custom value, if it's included in the pipeline YAML.",
+    );
     try {
       // look for posprocessing block with a map_labels step
-      for (ProcessingBlock block in inferenceObject.modelPipeline!.postprocessing) {
+      for (ProcessingBlock block
+          in inferenceObject.modelPipeline!.postprocessing) {
         for (ProcessingStep step in block.steps) {
           if (step.step == 'map_labels') {
             numResults = step.params['top_k'];
           }
         }
       }
-    } 
-    catch (e) {
-      debugPrint("Error setting numResults, maybe it's not in the pipeline YAML. Using default value of 3.");
+    } catch (e) {
+      debugPrint(
+        "Error setting numResults, maybe it's not in the pipeline YAML. Using default value of 3.",
+      );
     }
-
   }
-
 
   @override
   Widget build(BuildContext context) {
+    return FutureBuilder<void>(
+      future: _modelInitFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snapshot.hasError) {
+          return const Scaffold(
+            body: Center(
+              child: Text(
+                'Model not loaded. Check logs.',
+                style: TextStyle(color: Colors.orange, fontSize: 16),
+              ),
+            ),
+          );
+        }
+        return _buildMainContent(context);
+      },
+    );
+  }
+
+  Widget _buildMainContent(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Image Classification'),
-      ),
-      body: SingleChildScrollView( // Allow scrolling if content overflows
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              const SizedBox(height: 20),
-              // Display selected image
-              _selectedImage == null
-                  ? Container(
-                      height: 250,
-                      width: 250,
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Center(child: Text('No image selected.')),
-                    )
-                  : Container(
-                      margin: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Colors.grey),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: ClipRRect( // Clip image to rounded corners
-                        borderRadius: BorderRadius.circular(11),
-                        child: Image.file(
-                          _selectedImage!,
-                          width: 300,
-                          height: 300,
-                          fit: BoxFit.cover,
+      appBar: AppBar(title: const Text('Image Classification')),
+      body: Stack(
+        children: [
+          SingleChildScrollView(
+            // Allow scrolling if content overflows
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  const SizedBox(height: 20),
+                  // Display selected image
+                  _selectedImage == null
+                      ? Container(
+                        height: 250,
+                        width: 250,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Center(child: Text('No image selected.')),
+                      )
+                      : Container(
+                        margin: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: ClipRRect(
+                          // Clip image to rounded corners
+                          borderRadius: BorderRadius.circular(11),
+                          child: Image.file(
+                            _selectedImage!,
+                            width: 300,
+                            height: 300,
+                            fit: BoxFit.cover,
+                          ),
                         ),
                       ),
+                  const SizedBox(height: 20),
+                  // Buttons to pick image
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.image),
+                        label: const Text('Gallery'),
+                        onPressed: _isLoading ? null : () => _pickImage(ImageSource.gallery),
+                      ),
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.camera_alt),
+                        label: const Text('Camera'),
+                        onPressed: _isLoading ? null : () => _pickImage(ImageSource.camera),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  // Results
+                  if (_recognitions != null && !_isLoading)
+                    Padding(
+                      padding: const EdgeInsets.all(15.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Results:',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          ..._recognitions!.take(numResults).map((rec) {
+                            return Text(
+                              '${rec['label']} (${(rec['confidence'] * 100).toStringAsFixed(1)}%)',
+                              style: const TextStyle(fontSize: 16),
+                            );
+                          }),
+                        ],
+                      ),
                     ),
-              const SizedBox(height: 20),
-              // Buttons to pick image
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.image),
-                    label: const Text('Gallery'),
-                    onPressed: () => _pickImage(ImageSource.gallery),
-                  ),
-                  ElevatedButton.icon(
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('Camera'),
-                    onPressed: () => _pickImage(ImageSource.camera),
-                  ),
+                  const SizedBox(height: 20),
                 ],
               ),
-              const SizedBox(height: 20),
-              // Display loading indicator or results
-              _isLoading
-                  ? const CircularProgressIndicator()
-                  : _recognitions != null
-                      ? Padding(
-                          padding: const EdgeInsets.all(15.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Results:',
-                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                              ),
-                              const SizedBox(height: 10),
-                              // Display top 3 results (or fewer if less results)
-                              ..._recognitions!.take(numResults).map((rec) {
-                                return Text(
-                                  '${rec['label']} (${(rec['confidence'] * 100).toStringAsFixed(1)}%)',
-                                  style: const TextStyle(fontSize: 16),
-                                );
-                              }).toList(),
-                            ],
-                          ),
-                        )
-                      : Container(), // Show nothing if no results yet
-              const SizedBox(height: 20),
-            ],
+            ),
           ),
-        ),
+          // Inference loading overlay
+          if (_isLoading)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Color(0xAA000000),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(color: Colors.white),
+                      SizedBox(height: 16),
+                      Text(
+                        'Running model\u2026',
+                        style: TextStyle(color: Colors.white, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
- }
-  
+}

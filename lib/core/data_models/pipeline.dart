@@ -1,12 +1,9 @@
 import 'dart:core';
-import 'package:flutter/material.dart';
 import 'package:yaml/yaml.dart';
-import 'dart:async';
 import 'dart:io';
 import 'package:json_annotation/json_annotation.dart';
 
 part 'pipeline.g.dart';
-
 
 @JsonSerializable()
 class Pipeline {
@@ -26,10 +23,10 @@ class Pipeline {
   });
 
   // factory to generate Dart object from decoded JSON
-  factory Pipeline.fromJson(Map<String, dynamic> json) => _$PipelineFromJson(json);
+  factory Pipeline.fromJson(Map<String, dynamic> json) =>
+      _$PipelineFromJson(json);
 
   Map<String, dynamic> toJson() => _$PipelineToJson(this);
-
 }
 
 // metadata component data model
@@ -58,10 +55,10 @@ class ModelMetadata {
     required this.source_repository,
   });
 
-  factory ModelMetadata.fromJson(Map<String, dynamic> json) => _$ModelMetadataFromJson(json);
+  factory ModelMetadata.fromJson(Map<String, dynamic> json) =>
+      _$ModelMetadataFromJson(json);
   Map<String, dynamic> toJson() => _$ModelMetadataToJson(this);
 }
-
 
 // IO component data model
 @JsonSerializable()
@@ -86,7 +83,6 @@ class IO {
   factory IO.fromJson(Map<String, dynamic> json) => _$IOFromJson(json);
   Map<String, dynamic> toJson() => _$IOToJson(this);
 }
-
 
 // processing block component data model
 @JsonSerializable()
@@ -114,10 +110,10 @@ class ProcessingBlock {
     required this.steps,
   });
 
-  factory ProcessingBlock.fromJson(Map<String, dynamic> json) => _$ProcessingBlockFromJson(json);
+  factory ProcessingBlock.fromJson(Map<String, dynamic> json) =>
+      _$ProcessingBlockFromJson(json);
   Map<String, dynamic> toJson() => _$ProcessingBlockToJson(this);
 }
-
 
 // processing step component data model
 @JsonSerializable()
@@ -127,15 +123,12 @@ class ProcessingStep {
   final String step;
   final Map<String, dynamic> params;
 
-  ProcessingStep({
-    required this.step,
-    required this.params,
-  });
+  ProcessingStep({required this.step, required this.params});
 
-  factory ProcessingStep.fromJson(Map<String, dynamic> json) => _$ProcessingStepFromJson(json);
+  factory ProcessingStep.fromJson(Map<String, dynamic> json) =>
+      _$ProcessingStepFromJson(json);
   Map<String, dynamic> toJson() => _$ProcessingStepToJson(this);
 }
-
 
 Future<Map> parseMetadata(String metadataPath) async {
   // get string from metadata file

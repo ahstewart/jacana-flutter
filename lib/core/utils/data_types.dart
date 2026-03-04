@@ -1,7 +1,5 @@
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
-
 
 // helper function to check if list is flattened
 bool isNestedList(List list) {
@@ -14,7 +12,7 @@ bool isNHWC(List<int> shape) {
   if (shape.length != 4) {
     return false;
   }
-  
+
   // For typical image data:
   // - batch size is usually 1
   // - channels should be 1 (grayscale), 3 (RGB), or 4 (RGBA)
@@ -23,15 +21,15 @@ bool isNHWC(List<int> shape) {
   final height = shape[1];
   final width = shape[2];
   final channels = shape[3];
-  
+
   if (channels != 1 && channels != 3 && channels != 4) {
     return false;
   }
-  
+
   if (height <= 0 || width <= 0) {
     return false;
   }
-  
+
   return true;
 }
 
@@ -41,7 +39,7 @@ bool isNCHW(List<int> shape) {
   if (shape.length != 4) {
     return false;
   }
-  
+
   // For typical image data:
   // - batch size is usually 1
   // - height and width should be positive numbers
@@ -51,15 +49,14 @@ bool isNCHW(List<int> shape) {
   final height = shape[2];
   final width = shape[3];
 
-  
   if (channels != 1 && channels != 3 && channels != 4) {
     return false;
   }
-  
+
   if (height <= 0 || width <= 0) {
     return false;
   }
-  
+
   return true;
 }
 
@@ -91,31 +88,33 @@ dynamic nhwcToNchw(dynamic input) {
   dynamic output;
   if (input is Float32List) {
     output = Float32List(input.length);
-  }
-  else if (input is Uint8List) {
+  } else if (input is Uint8List) {
     output = Uint8List(input.length);
-  }
-  else {
+  } else {
     if (kDebugMode) {
       debugPrint("input type: $input.runtimeType()");
     }
-    throw ArgumentError("Cannot convert NHWC to NCHW, input must be Float32List or Uint8List.");
+    throw ArgumentError(
+      "Cannot convert NHWC to NCHW, input must be Float32List or Uint8List.",
+    );
   }
   for (int b = 0; b < batchSize; b++) {
     for (int h = 0; h < height; h++) {
       for (int w = 0; w < width; w++) {
         for (int c = 0; c < channels; c++) {
           // Convert from NHWC [b, h, w, c] to NCHW [b, c, h, w]
-          final nhwcIndex = b * height * width * channels + 
-                          h * width * channels + 
-                          w * channels + 
-                          c;
-          
-          final nchwIndex = b * channels * height * width + 
-                          c * height * width + 
-                          h * width + 
-                          w;
-                          
+          final nhwcIndex =
+              b * height * width * channels +
+              h * width * channels +
+              w * channels +
+              c;
+
+          final nchwIndex =
+              b * channels * height * width +
+              c * height * width +
+              h * width +
+              w;
+
           output[nchwIndex] = input[nhwcIndex];
         }
       }
@@ -129,24 +128,24 @@ dynamic nchwToNhwc(dynamic input) {
   if (kDebugMode) {
     debugPrint("Converting image layout from NCHW to NHWC");
   }
-  
+
   final int channels = input.shape[1];
   final int height = input.shape[2];
   final int width = input.shape[3];
   final int batchSize = input.length ~/ (height * width * channels);
-  
+
   dynamic output;
   if (input is Float32List) {
     output = Float32List(input.length);
-  }
-  else if (input is Uint8List) {
+  } else if (input is Uint8List) {
     output = Uint8List(input.length);
-  }
-  else {
+  } else {
     if (kDebugMode) {
       debugPrint("input type: ${input.runtimeType}");
     }
-    throw ArgumentError("Cannot convert NCHW to NHWC, input must be Float32List or Uint8List.");
+    throw ArgumentError(
+      "Cannot convert NCHW to NHWC, input must be Float32List or Uint8List.",
+    );
   }
 
   for (int b = 0; b < batchSize; b++) {
@@ -154,16 +153,18 @@ dynamic nchwToNhwc(dynamic input) {
       for (int w = 0; w < width; w++) {
         for (int c = 0; c < channels; c++) {
           // Convert from NCHW [b, c, h, w] to NHWC [b, h, w, c]
-          final nchwIndex = b * channels * height * width + 
-                          c * height * width + 
-                          h * width + 
-                          w;
-          
-          final nhwcIndex = b * height * width * channels + 
-                          h * width * channels + 
-                          w * channels + 
-                          c;
-                          
+          final nchwIndex =
+              b * channels * height * width +
+              c * height * width +
+              h * width +
+              w;
+
+          final nhwcIndex =
+              b * height * width * channels +
+              h * width * channels +
+              w * channels +
+              c;
+
           output[nhwcIndex] = input[nchwIndex];
         }
       }

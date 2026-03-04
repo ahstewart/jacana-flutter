@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -14,7 +16,6 @@ import '../utils/list_extensions.dart';
 import '../utils/data_types.dart';
 import '../utils/math.dart';
 
-
 // inference class that contains methods for loading models, pre and post processing, and running the actual inference
 class InferenceService {
   // initialize interpreter, pipeline (metadata), etc
@@ -28,34 +29,48 @@ class InferenceService {
 
   final String modelPath;
   final String pipelinePath;
+  // When true, modelPath and pipelinePath are filesystem paths (downloaded models).
+  // When false (default), they are Flutter asset paths.
+  final bool isLocalFile;
+  // Directory containing the downloaded model assets (tflite, labels, etc.).
+  // Required when isLocalFile is true.
+  final String? localDir;
 
   InferenceService({
     required this.modelPath,
     required this.pipelinePath,
+    this.isLocalFile = false,
+    this.localDir,
   });
 
   // Call this to initialize
   Future<void> initialize() async {
-    await loadPipeline(pipelinePath); // Load pipeline first to get model info if needed
+    await loadPipeline(
+      pipelinePath,
+    ); // Load pipeline first to get model info if needed
     await loadModel(modelPath); // Load model
     await loadLabelsIfNeeded(); // Load labels if needed by any postprocessing step
   }
 
   // load model from model_path (AKA create an interpreter)
-  Future<void> loadModel(String modelPath, {String modelFramework="tflite"}) async {
+  Future<void> loadModel(
+    String modelPath, {
+    String modelFramework = "tflite",
+  }) async {
     if (modelFramework == "tflite") {
       debugPrint("Loading TFLite model from $modelPath...");
       final options = InterpreterOptions();
 
       try {
-        _interpreter = await Interpreter.fromAsset(modelPath, options:options);
+        _interpreter = isLocalFile
+            ? Interpreter.fromFile(File(modelPath), options: options)
+            : await Interpreter.fromAsset(modelPath, options: options);
 
         if (kDebugMode) {
           debugPrint(_interpreter?.getInputTensors().toString());
           debugPrint(_interpreter?.getOutputTensors().toString());
         }
-      }
-      catch (e) {
+      } catch (e) {
         if (kDebugMode) {
           debugPrint("Failed to load model: $e");
         }
@@ -69,12 +84,16 @@ class InferenceService {
       debugPrint("Loading model pipeline file...");
     }
 
-    // get string from pipeline file
-    String pipelineContents = await rootBundle.loadString(pipelinePath);
-    // parse the string using the yaml package and return the parsed map
-    YamlMap pipelineYamlMap = loadYaml(pipelineContents);
-    // convert YAML map to Map<String, 
-    Map<String, dynamic> pipelineMap = _convertYamlToJson(pipelineYamlMap);
+    final Map<String, dynamic> pipelineMap;
+    if (isLocalFile) {
+      // Local files are stored as JSON (PipelineConfig schema, compatible with Pipeline.fromJson).
+      final contents = await File(pipelinePath).readAsString();
+      pipelineMap = jsonDecode(contents) as Map<String, dynamic>;
+    } else {
+      // Asset files are YAML.
+      final contents = await rootBundle.loadString(pipelinePath);
+      pipelineMap = _convertYamlToJson(loadYaml(contents)) as Map<String, dynamic>;
+    }
 
     // create pipeline object from pipeline_map
     modelPipeline = Pipeline.fromJson(pipelineMap);
@@ -89,33 +108,62 @@ class InferenceService {
     if (modelPipeline == null) return;
     String? labelsUrl;
     for (var block in modelPipeline!.postprocessing) {
-        for (var step in block.steps) {
-            if (step.step == 'map_labels') {
-                labelsUrl = step.params['labels_url'] as String?;
-                break;
-            }
+      for (var step in block.steps) {
+        if (step.step == 'map_labels') {
+          labelsUrl = step.params['labels_url'] as String?;
+          break;
         }
-        if (labelsUrl != null) break;
+      }
+      if (labelsUrl != null) break;
+    }
+
+    // For local models, load labels from the downloaded file regardless of the pipeline's labels_url.
+    if (isLocalFile && localDir != null) {
+      final labelsFile = File('$localDir/labels');
+      if (await labelsFile.exists()) {
+        final labelsData = await labelsFile.readAsString();
+        _labels = labelsData
+            .split('\n')
+            .map((l) => l.trim())
+            .where((l) => l.isNotEmpty)
+            .toList();
+        debugPrint('InferenceService: Labels loaded from local file: ${_labels?.length} labels');
+      } else {
+        _labels = [];
+        debugPrint('InferenceService: No local labels file found.');
+      }
+      return;
     }
 
     if (labelsUrl != null) {
-        try {
-            final labelsData = await rootBundle.loadString(labelsUrl);
-            _labels = labelsData.split('\n').map((label) => label.trim()).where((label) => label.isNotEmpty).toList();
-            if (kDebugMode) {
-                debugPrint("InferenceService: Labels loaded from $labelsUrl: ${_labels?.length} labels");
-            }
-        } catch (e) {
-            if (kDebugMode) {
-                debugPrint("InferenceService: Failed to load labels from $labelsUrl: $e");
-            }
-            _labels = []; // Default to empty on error
-        }
-    } else {
-        _labels = [];
+      try {
+        final labelsData = await rootBundle.loadString(labelsUrl);
+        _labels =
+            labelsData
+                .split('\n')
+                .map((label) => label.trim())
+                .where((label) => label.isNotEmpty)
+                .toList();
         if (kDebugMode) {
-            debugPrint("InferenceService: No 'labels_url' found in any 'map_labels' postprocessing step.");
+          debugPrint(
+            "InferenceService: Labels loaded from $labelsUrl: ${_labels?.length} labels",
+          );
         }
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint(
+            "InferenceService: Failed to load labels from $labelsUrl: $e",
+          );
+        }
+        _labels = []; // Default to empty on error
+      }
+    } else {
+      _labels = [];
+      if (kDebugMode) {
+        debugPrint(
+          "InferenceService: No 'labels_url' found in any 'map_labels' postprocessing step.",
+        );
+      }
     }
   }
 
@@ -133,23 +181,27 @@ class InferenceService {
     }
     return yaml;
   }
-  
+
   // the inference object needs to handle the preprocessing, inference, and postprocessing phase
   // preprocess will take a raw input, and based on the pipeline YAML, perform the preprocessing, and return a
   // tensor ready for inference
-  Future<dynamic> preprocess(dynamic rawInput, String _inputName) async {
+  Future<dynamic> preprocess(dynamic rawInput, String inputName) async {
     // first make sure model and pipeline are loaded
     if (!isReady) {
       if (kDebugMode) {
-            debugPrint("Cannot preprocess input, model or pipeline have not been successfully loaded.");
-          }
+        debugPrint(
+          "Cannot preprocess input, model or pipeline have not been successfully loaded.",
+        );
+      }
       return rawInput;
     }
     // then make sure pipeline includes preprocessing steps? if it doesn't, skip all of this and return rawInput
     if (modelPipeline!.preprocessing.isEmpty) {
       if (kDebugMode) {
-            debugPrint("Pipeline is missing preprocessing block, returning raw input unchanged.");
-          }
+        debugPrint(
+          "Pipeline is missing preprocessing block, returning raw input unchanged.",
+        );
+      }
       return rawInput;
     }
 
@@ -160,17 +212,19 @@ class InferenceService {
 
     debugPrint("Matching given input name to input name in pipeline file.");
     // match _inputName to an input block
-      for (var i = 0; i < modelPipeline!.inputs.length; i++) {
-        if (modelPipeline!.inputs[i].name == _inputName) {
-          inputIndex = i;
-          break;
+    for (var i = 0; i < modelPipeline!.inputs.length; i++) {
+      if (modelPipeline!.inputs[i].name == inputName) {
+        inputIndex = i;
+        break;
       }
     }
 
-    debugPrint("Matching input name to a preprocessing block in pipeline file.");
+    debugPrint(
+      "Matching input name to a preprocessing block in pipeline file.",
+    );
     // match _inputName to a preprocessing block
     for (var i = 0; i < modelPipeline!.preprocessing.length; i++) {
-      if (modelPipeline!.preprocessing[i].input_name == _inputName) {
+      if (modelPipeline!.preprocessing[i].input_name == inputName) {
         preprocessBlockIndex = i;
         break;
       }
@@ -179,106 +233,144 @@ class InferenceService {
     // check if the input could not be matched to an input block or preprocessing block
     if (inputIndex == null || preprocessBlockIndex == null) {
       if (kDebugMode) {
-            debugPrint("Provided input name does not match input or preprocessing block in pipeline. Aborting preprocessing.");
-          }
+        debugPrint(
+          "Provided input name does not match input or preprocessing block in pipeline. Aborting preprocessing.",
+        );
+      }
       return rawInput;
     }
 
     // once the preprocessing step and input are matched, use the expects_type to validate the rawInput
-    final String expectedType = modelPipeline!.preprocessing[preprocessBlockIndex].expects_type;
+    final String expectedType =
+        modelPipeline!.preprocessing[preprocessBlockIndex].expects_type;
 
-    debugPrint("Validating that the raw input matches the 'expects_type' parameter in the pipeline file...");
+    debugPrint(
+      "Validating that the raw input matches the 'expects_type' parameter in the pipeline file...",
+    );
     switch (expectedType) {
       case 'image':
         if (rawInput is! img.Image) {
           if (kDebugMode) {
             debugPrint("Raw input type: ${rawInput.runtimeType.toString()}");
-            throw ArgumentError("This preprocessing block expects an image, but raw input is not an img.Image type. Aborting preprocessing.");
+            throw ArgumentError(
+              "This preprocessing block expects an image, but raw input is not an img.Image type. Aborting preprocessing.",
+            );
           }
           return rawInput;
         }
         if (kDebugMode) {
-            debugPrint("Raw input type matches expected type. Proceeding with preprocessing.");
-            }
+          debugPrint(
+            "Raw input type matches expected type. Proceeding with preprocessing.",
+          );
+        }
         break;
       case 'text':
         if (rawInput is! String) {
           if (kDebugMode) {
             debugPrint("Raw input type: ${rawInput.runtimeType.toString()}");
-            throw ArgumentError("This preprocessing block expects text, but raw input is not a String. Aborting preprocessing.");
+            throw ArgumentError(
+              "This preprocessing block expects text, but raw input is not a String. Aborting preprocessing.",
+            );
           }
           return rawInput;
         }
         if (kDebugMode) {
-            debugPrint("Raw input type match expected type. Proceeding with preprocessing.");
+          debugPrint(
+            "Raw input type match expected type. Proceeding with preprocessing.",
+          );
         }
         break;
       case 'audio':
         if (rawInput is! Uint8List) {
           if (kDebugMode) {
             debugPrint("Raw input type: ${rawInput.runtimeType.toString()}");
-            throw ArgumentError("This preprocessing block expects a audio, but raw input is not a Uint8List type. Aborting preprocessing.");
+            throw ArgumentError(
+              "This preprocessing block expects a audio, but raw input is not a Uint8List type. Aborting preprocessing.",
+            );
           }
           return rawInput;
         }
         if (kDebugMode) {
-            debugPrint("Raw input type match expected type. Proceeding with preprocessing.");
+          debugPrint(
+            "Raw input type match expected type. Proceeding with preprocessing.",
+          );
         }
         break;
       // Add cases for other expected raw input types ('tensor', 'generic_list', etc.)
       default:
-        throw UnimplementedError("Unsupported 'expects_type' in pipeline: $expectedType");
-      }
-      debugPrint("Raw input type validated.");
+        throw UnimplementedError(
+          "Unsupported 'expects_type' in pipeline: $expectedType",
+        );
+    }
+    debugPrint("Raw input type validated.");
 
-      // now that input is validated, start tracking the input with a variable
-      // initialize it with the rawInput
-      dynamic currentInput = rawInput;
+    // now that input is validated, start tracking the input with a variable
+    // initialize it with the rawInput
+    dynamic currentInput = rawInput;
 
-      debugPrint("Executing steps for preprocessing block ${modelPipeline!.preprocessing[preprocessBlockIndex].input_name}...");
-      // start looping through the preprocessing steps
-      for (var preStep in modelPipeline!.preprocessing[preprocessBlockIndex].steps) {
-        currentInput = await _performPreprocessingStep(currentInput, preStep, preprocessBlockIndex);
-        debugPrint("Preprocessing step ${preStep.step} completed successfully...");
-      }
+    debugPrint(
+      "Executing steps for preprocessing block ${modelPipeline!.preprocessing[preprocessBlockIndex].input_name}...",
+    );
+    // start looping through the preprocessing steps
+    for (var preStep
+        in modelPipeline!.preprocessing[preprocessBlockIndex].steps) {
+      currentInput = await _performPreprocessingStep(
+        currentInput,
+        preStep,
+        preprocessBlockIndex,
+      );
+      debugPrint(
+        "Preprocessing step ${preStep.step} completed successfully...",
+      );
+    }
 
-      debugPrint("Preprocessing complete.");
+    debugPrint("Preprocessing complete.");
 
-      // return final input tensor
-      return currentInput;
+    // return final input tensor
+    return currentInput;
   }
 
   // postprocess complete a postprocessing block and return a Map which will be the final inference result
   // the input to postprocess is the postprocessing block, the raw outputs map (source tensors), and the final result map
-  Future<dynamic> postprocess(Map<String, dynamic> rawOutputs, int postprocessBlockIndex) async {
+  Future<dynamic> postprocess(
+    Map<String, dynamic> rawOutputs,
+    int postprocessBlockIndex,
+  ) async {
     debugPrint("Starting postprocessing...");
 
     // declare some variables to make things easier
-    ProcessingBlock block = modelPipeline!.postprocessing[postprocessBlockIndex];
+    ProcessingBlock block =
+        modelPipeline!.postprocessing[postprocessBlockIndex];
     String outputName = block.output_name;
     // declare a variable to track the current output
     dynamic currentResult = rawOutputs[block.source_tensors[0]];
     String interpretation = block.interpretation.toString().toLowerCase();
-    
+
     debugPrint("Checking if the postprocessing block contains steps...");
     // make sure pipeline includes postprocessing steps? if it doesn't, skip all of this and return rawInput
     if (modelPipeline!.postprocessing.isEmpty) {
       if (kDebugMode) {
-            debugPrint("Pipeline is missing postprocessing blocks, returning raw output unchanged.");
-          }
+        debugPrint(
+          "Pipeline is missing postprocessing blocks, returning raw output unchanged.",
+        );
+      }
       return currentResult;
     }
 
     debugPrint("Postprocessing block contained steps.");
 
-    debugPrint("Checking if source tensors are present in all postprocessing blocks...");
+    debugPrint(
+      "Checking if source tensors are present in all postprocessing blocks...",
+    );
     // check that all source tensors in the postprocessing block are present in the output map
     List<String> sourceTensors = block.source_tensors;
     for (var tensor in sourceTensors) {
       if (!rawOutputs.containsKey(tensor)) {
         if (kDebugMode) {
-            debugPrint("Output map does not contain source tensor: $tensor. Aborting postprocessing and returning raw output unchanged.");
-          }
+          debugPrint(
+            "Output map does not contain source tensor: $tensor. Aborting postprocessing and returning raw output unchanged.",
+          );
+        }
         return currentResult;
       }
     }
@@ -288,54 +380,102 @@ class InferenceService {
     debugPrint("Executing steps for ${block.output_name}...");
     // start looping through the postprocessing steps
     for (var postStep in block.steps) {
-      currentResult = await _performPostprocessingStep(currentResult, rawOutputs, postStep);
+      currentResult = await _performPostprocessingStep(
+        currentResult,
+        rawOutputs,
+        postStep,
+      );
       if (currentResult == null && postStep != block.steps.last) {
-        throw Exception("Postprocessing block '$outputName', step '${postStep.step}' failed or returned null unexpectedly.");
+        throw Exception(
+          "Postprocessing block '$outputName', step '${postStep.step}' failed or returned null unexpectedly.",
+        );
       }
-      debugPrint("Postprocessing step ${postStep.step} completed successfully...");
+      debugPrint(
+        "Postprocessing step ${postStep.step} completed successfully...",
+      );
     }
-    
+
     if (kDebugMode) {
       debugPrint("Postprocessing complete.");
-      developer.log("Inspecting postprocessing result for block ${modelPipeline!.postprocessing[postprocessBlockIndex].output_name}");
+      developer.log(
+        "Inspecting postprocessing result for block ${modelPipeline!.postprocessing[postprocessBlockIndex].output_name}",
+      );
       developer.inspect(currentResult);
     }
 
-
-    debugPrint("Adding result from postprocess block ${modelPipeline!.postprocessing[postprocessBlockIndex].output_name} to the final results map.");
-    debugPrint("Mapping postprocessed result to a sealed inference result class for interpretation $interpretation");
+    debugPrint(
+      "Adding result from postprocess block ${modelPipeline!.postprocessing[postprocessBlockIndex].output_name} to the final results map.",
+    );
+    debugPrint(
+      "Mapping postprocessed result to a sealed inference result class for interpretation $interpretation",
+    );
     switch (interpretation) {
       case 'classification_logits':
       case 'classification_scores':
       case 'classification_probabilities':
         if (currentResult is List) {
-          try { return ClassificationResult(currentResult.cast<Map<String, dynamic>>()); }
-          catch (e) { return ErrorResult("Postprocessing for '$outputName' (classification) produced a List, but elements were not Map<String, dynamic>."); }
+          try {
+            return ClassificationResult(
+              currentResult.cast<Map<String, dynamic>>(),
+            );
+          } catch (e) {
+            return ErrorResult(
+              "Postprocessing for '$outputName' (classification) produced a List, but elements were not Map<String, dynamic>.",
+            );
+          }
         }
-        return ErrorResult("Postprocessing for '$outputName' (classification) did not produce a List. Got ${currentResult.runtimeType}");
+        return ErrorResult(
+          "Postprocessing for '$outputName' (classification) did not produce a List. Got ${currentResult.runtimeType}",
+        );
       case 'detection_boxes_scores_classes':
         if (currentResult is Map<int, List<Map<String, dynamic>>>) {
-          try { return ErrorResult("test"); }
-          catch (e) { return ErrorResult("Postprocessing for '$outputName' (detection) produced a Map<int, List<Map<String, dynamic>>> but failed to cast."); }
-        } else if (currentResult is List && currentResult.isNotEmpty && currentResult.first is Map<int, List<Map<String, dynamic>>>) {
-          try { return DetectionResult(currentResult.first as Map<int, List<Map<String, dynamic>>>); }
-          catch (e) { return ErrorResult("Postprocessing for '$outputName' (detection) produced a List, but elements were not Map<int, List<Map<String, dynamic>>>."); }
+          try {
+            return ErrorResult("test");
+          } catch (e) {
+            return ErrorResult(
+              "Postprocessing for '$outputName' (detection) produced a Map<int, List<Map<String, dynamic>>> but failed to cast.",
+            );
+          }
+        } else if (currentResult is List &&
+            currentResult.isNotEmpty &&
+            currentResult.first is Map<int, List<Map<String, dynamic>>>) {
+          try {
+            return DetectionResult(
+              currentResult.first as Map<int, List<Map<String, dynamic>>>,
+            );
+          } catch (e) {
+            return ErrorResult(
+              "Postprocessing for '$outputName' (detection) produced a List, but elements were not Map<int, List<Map<String, dynamic>>>.",
+            );
+          }
         }
-        return ErrorResult("Postprocessing for '$outputName' (detection) did not produce a Map<int, List<Map<String, dynamic>>>. Got ${currentResult.runtimeType}");
+        return ErrorResult(
+          "Postprocessing for '$outputName' (detection) did not produce a Map<int, List<Map<String, dynamic>>>. Got ${currentResult.runtimeType}",
+        );
       case 'text_generation':
-            if (currentResult is String) { return TextResult(currentResult); }
-            return ErrorResult("Postprocessing for '$outputName' (text) did not produce a String. Got ${currentResult.runtimeType}");
+        if (currentResult is String) {
+          return TextResult(currentResult);
+        }
+        return ErrorResult(
+          "Postprocessing for '$outputName' (text) did not produce a String. Got ${currentResult.runtimeType}",
+        );
       default:
-        if (kDebugMode) debugPrint("InferenceService: Warning: Unknown postprocessing interpretation '$interpretation' for output '$outputName'. Wrapping as GenericDataResult.");
+        if (kDebugMode)
+          debugPrint(
+            "InferenceService: Warning: Unknown postprocessing interpretation '$interpretation' for output '$outputName'. Wrapping as GenericDataResult.",
+          );
         return GenericDataResult(currentResult);
     }
   }
 
-
   // execute a preprocessing step, given the step and the input data
-  Future<dynamic> _performPreprocessingStep(dynamic inputData, ProcessingStep step, int preprocessingBlockIndex) async {
+  Future<dynamic> _performPreprocessingStep(
+    dynamic inputData,
+    ProcessingStep step,
+    int preprocessingBlockIndex,
+  ) async {
     if (kDebugMode) {
-          debugPrint("Executing preprocessing step: ${step.step}");
+      debugPrint("Executing preprocessing step: ${step.step}");
     }
 
     switch (step.step) {
@@ -343,10 +483,13 @@ class InferenceService {
       case 'resize_image':
         try {
           // resize image to sizes defined in the model metadata schema (MMS)
-          img.Image resizedImage = img.copyResize(inputData, width: step.params['width'], height: step.params['height']);
+          img.Image resizedImage = img.copyResize(
+            inputData,
+            width: step.params['width'],
+            height: step.params['height'],
+          );
           return resizedImage;
-        }
-        catch (e) {
+        } catch (e) {
           if (kDebugMode) {
             debugPrint("Error resizing image: $e");
             debugPrint("Returning input image with size unchanged.");
@@ -370,25 +513,29 @@ class InferenceService {
               inputData = imgToBytes(inputData, normalizeColorSpace);
               inputData = Uint8List.fromList(inputData);
               debugPrint("Converted image to Uint8List.");
-            } 
-            catch (e) {
-                if (kDebugMode) {
-                  debugPrint('Error converting image to bytes: $e');
-                }
-                throw Exception('Normalization error: Failed to convert image to bytes');
+            } catch (e) {
+              if (kDebugMode) {
+                debugPrint('Error converting image to bytes: $e');
+              }
+              throw Exception(
+                'Normalization error: Failed to convert image to bytes',
+              );
             }
-          }
-          else {
+          } else {
             debugPrint("Input data type is ${inputData.runtimeType}");
           }
           var normBytes = Float32List(inputData.length);
           // first try the 'mean_stddev' method, which first normalizes the image pixel between 0 and 1 by dividing by 255,
-          // then applies the mean and stddev normalization for each channel. This method requires the mean and stddev parameters 
+          // then applies the mean and stddev normalization for each channel. This method requires the mean and stddev parameters
           // to be lists with a length equal to the number of channels in the inputImage
           debugPrint("Executing normalization using the $method method...");
           if (method == "mean_stddev") {
-            List mean = step.params['mean'] ?? List.filled(normalizeColorSpace.length, 0.456);
-            List stddev = step.params['stddev'] ?? List.filled(normalizeColorSpace.length, 0.224);
+            List mean =
+                step.params['mean'] ??
+                List.filled(normalizeColorSpace.length, 0.456);
+            List stddev =
+                step.params['stddev'] ??
+                List.filled(normalizeColorSpace.length, 0.224);
             for (var i = 0; i < inputData.length; i += 3) {
               normBytes[i] = ((inputData[i] / 255) - mean[0]) / stddev[0];
               normBytes[i++] = ((inputData[i++] / 255) - mean[1]) / stddev[1];
@@ -416,16 +563,14 @@ class InferenceService {
             }
             // final normImage = normBytes.reshape([1, inputImage.width, inputImage.height, inputImage.numChannels]);
             return normBytes;
-          }
-          else {
+          } else {
             if (kDebugMode) {
               debugPrint("Error normalizing image: Invalid 'method' parameter");
             }
           }
           debugPrint("Normalized image successfully.");
           return inputData; // return input image bytes if normalization didn't take place
-        }
-        catch (e) {
+        } catch (e) {
           if (kDebugMode) {
             debugPrint("Error normalizing image: $e");
             debugPrint("Returning input unchanged.");
@@ -433,7 +578,6 @@ class InferenceService {
           return inputData;
         }
 
-      
       // reformat preprocessed data to match input requirements
       case 'format':
         dynamic finalData = inputData;
@@ -443,32 +587,30 @@ class InferenceService {
 
         // first format data type and color space. supports 2 types of conversions: float32 and uint8
         // color space formatting is done with the imgToBytes helper method
-        if (targetDtype == 'float32' && inputData is! Float32List) { 
-          if (inputData is img.Image) { 
+        if (targetDtype == 'float32' && inputData is! Float32List) {
+          if (inputData is img.Image) {
             var imageBytes = imgToBytes(inputData, inputColorSpace);
-            finalData = Float32List.fromList(imageBytes.map((e) => e / 255.0).toList());
-          } 
-          else { 
-            throw Exception("Cannot format unsupported type to float32"); 
-          } 
-        } 
-        else if (targetDtype == 'uint8' && inputData is! Uint8List) { 
-          if (inputData is img.Image) { 
+            finalData = Float32List.fromList(
+              imageBytes.map((e) => e / 255.0).toList(),
+            );
+          } else {
+            throw Exception("Cannot format unsupported type to float32");
+          }
+        } else if (targetDtype == 'uint8' && inputData is! Uint8List) {
+          if (inputData is img.Image) {
             finalData = imgToBytes(inputData, inputColorSpace);
-          } 
-          else { 
-            throw Exception("Cannot format unsupported type to uint8"); 
-          } 
+          } else {
+            throw Exception("Cannot format unsupported type to uint8");
+          }
         }
 
         // get finalData shape for further processing
-        List<int> finalData_shape;
+        List<int> finaldataShape;
         debugPrint("finalData runtime type = ${finalData.runtimeType}");
         if (finalData is Float32List || finalData is Uint8List) {
-          finalData_shape = [1, finalData.length];
-        }
-        else {
-          finalData_shape = finalData.shape;
+          finaldataShape = [1, finalData.length];
+        } else {
+          finaldataShape = finalData.shape;
         }
 
         /*
@@ -495,7 +637,8 @@ class InferenceService {
 
         // lastly, check that the shape is identical to the shape parameter of the input object
         List<int> targetInputShape = [];
-        String preprocessingBlockInputName = modelPipeline!.preprocessing[preprocessingBlockIndex].input_name;
+        String preprocessingBlockInputName =
+            modelPipeline!.preprocessing[preprocessingBlockIndex].input_name;
         for (var inputs in modelPipeline!.inputs) {
           if (inputs.name == preprocessingBlockInputName) {
             targetInputShape = inputs.shape;
@@ -503,47 +646,55 @@ class InferenceService {
           }
         }
 
-        if (finalData_shape != targetInputShape) {
+        if (finaldataShape != targetInputShape) {
           if (kDebugMode) {
-            debugPrint("Final formatted data shape $finalData_shape does not match target input shape $targetInputShape");
-            debugPrint("Attempting to convert final data to target input shape");
+            debugPrint(
+              "Final formatted data shape $finaldataShape does not match target input shape $targetInputShape",
+            );
+            debugPrint(
+              "Attempting to convert final data to target input shape",
+            );
           }
 
-          try { 
+          try {
             switch (targetDtype.toLowerCase()) {
               case 'float32':
                 return (finalData as Float32List).reshape(targetInputShape);
               //case 'uint8':
               //  return (finalData as Uint8List).reshape(targetInputShape);
             }
-          }
-          catch (e) { 
+          } catch (e) {
             if (kDebugMode) {
-              debugPrint("Reshape error: $e. Input shape: $finalData_shape, Target shape: $targetInputShape");
+              debugPrint(
+                "Reshape error: $e. Input shape: $finaldataShape, Target shape: $targetInputShape",
+              );
             }
             return finalData;
           }
         }
-      
+
         return finalData;
 
       default:
         if (kDebugMode) {
-          debugPrint("Warning: Unsupported preprocessing step: ${step.step}"); 
+          debugPrint("Warning: Unsupported preprocessing step: ${step.step}");
         }
         return inputData;
     }
   }
 
-
   // perform inference given inputs and target output buffers
   // order of inferenceInputs will be mapped directly to the order of the pipeline inputs, so they must match
   // on the Flutter screen implementation
   // inferenceInputs is map keyed by the input name, so that the given input
-  Future<Map<String, InferenceResult>> performInference(Map<String, dynamic> inferenceInputs) async {
+  Future<Map<String, InferenceResult>> performInference(
+    Map<String, dynamic> inferenceInputs,
+  ) async {
     // check that the inputs provided match the inputs expected based on the pipeline file
     if (inferenceInputs.length != modelPipeline!.inputs.length) {
-      throw ArgumentError("Provided number of inputs (${inferenceInputs.length}) and expected number of inputs ($modelPipeline!.inputs.length}) do not match, cannot proceed with inference.");
+      throw ArgumentError(
+        "Provided number of inputs (${inferenceInputs.length}) and expected number of inputs ($modelPipeline!.inputs.length}) do not match, cannot proceed with inference.",
+      );
     }
 
     // preprocess inputs and construct the final input list for inference
@@ -565,7 +716,10 @@ class InferenceService {
     Map<int, Object> outputBuffers = {};
     List<IO> outputs = modelPipeline!.outputs;
     for (int i = 0; i < outputs.length; i++) {
-      outputBuffers[i] = _createOutputBuffer(outputs[i].shape, outputs[i].dtype);
+      outputBuffers[i] = _createOutputBuffer(
+        outputs[i].shape,
+        outputs[i].dtype,
+      );
     }
 
     if (kDebugMode) {
@@ -574,15 +728,17 @@ class InferenceService {
     _interpreter?.runForMultipleInputs(processedInputs, outputBuffers);
     debugPrint("Inference completed.");
     if (kDebugMode) {
-      developer.log("Inspecting outputBuffers variable from the TFLite inference.");
+      developer.log(
+        "Inspecting outputBuffers variable from the TFLite inference.",
+      );
       developer.inspect(outputBuffers);
     }
 
     // convert outputBuffers map to a String-keyed map using the output tensor names
     Map<String, dynamic> inferenceOutputs = {};
-    for (int i=0; i < outputBuffers.length; i++) {
+    for (int i = 0; i < outputBuffers.length; i++) {
       inferenceOutputs[modelPipeline!.outputs[i].name] = outputBuffers[i];
-      }
+    }
 
     // define the final results map, which will contain the final output from the model inference
     // the map is keyed by each postprocessing block's name and final output
@@ -595,41 +751,46 @@ class InferenceService {
         String blockName = modelPipeline!.postprocessing[i].output_name;
         finalResults[blockName] = await postprocess(inferenceOutputs, i);
         if (kDebugMode) {
-          debugPrint("Postprocessing block ${modelPipeline!.postprocessing[i].output_name} completed.");
+          debugPrint(
+            "Postprocessing block ${modelPipeline!.postprocessing[i].output_name} completed.",
+          );
         }
       }
-    }
-    else {
+    } else {
       if (kDebugMode) {
-        debugPrint("No postprocessing blocks found in pipeline, returning raw output.");
+        debugPrint(
+          "No postprocessing blocks found in pipeline, returning raw output.",
+        );
       }
-      finalResults = inferenceOutputs.map((key, value) => MapEntry(key, GenericDataResult(value)));
+      finalResults = inferenceOutputs.map(
+        (key, value) => MapEntry(key, GenericDataResult(value)),
+      );
     }
 
     if (kDebugMode) {
-      developer.log("Postprocessing complete, inspecting the finalResults output...");
+      developer.log(
+        "Postprocessing complete, inspecting the finalResults output...",
+      );
       developer.inspect(finalResults);
     }
-    
+
     // return the final results map
     return finalResults;
   }
 
-
   // method to dispose of the inference objects from memory
   void dispose() {
-    _interpreter?.close(); 
-    _interpreter = null; 
+    _interpreter?.close();
+    _interpreter = null;
     modelPipeline = null;
     if (kDebugMode) {
       debugPrint("Inference Object disposed.");
     }
   }
 
-
   // helper method to create an output buffer, given an output shape and data type
   dynamic _createOutputBuffer(List<int> shape, String dtype) {
-    int totalElements = shape.reduce((a, b) => a* b);
+    int totalElements = shape.reduce((a, b) => a * b);
     switch (dtype.toLowerCase()) {
       case 'float32':
         return ListShape(List.filled(totalElements, 0.0)).reshape(shape);
@@ -640,9 +801,12 @@ class InferenceService {
     }
   }
 
-
   // perform a postprocessing step, given a postprocessing block step object
-  Future<dynamic> _performPostprocessingStep(dynamic processedOutput, Map<String, dynamic> outputTensors, ProcessingStep step) async {
+  Future<dynamic> _performPostprocessingStep(
+    dynamic processedOutput,
+    Map<String, dynamic> outputTensors,
+    ProcessingStep step,
+  ) async {
     if (kDebugMode) {
       debugPrint("Executing postprocessing step: ${step.step}");
     }
@@ -652,7 +816,9 @@ class InferenceService {
       case 'apply_activation':
         // check that the current processed data is a List
         if (processedOutput is! List) {
-          throw FormatException("Processed output is not a List, cannot apply activation function.");
+          throw FormatException(
+            "Processed output is not a List, cannot apply activation function.",
+          );
         }
         // run activation function on input data based on function name
         String function = step.params["function"];
@@ -665,13 +831,17 @@ class InferenceService {
           //  return processedOutput.map((x) => x < 0 ? 0 : x).toList();
           default:
             if (kDebugMode) {
-              debugPrint("Warning: Unsupported activation function: $function, returning input data unchanged."); 
+              debugPrint(
+                "Warning: Unsupported activation function: $function, returning input data unchanged.",
+              );
             }
         }
 
         if (kDebugMode) {
           debugPrint("Finished ${step.step} postprocessing step.");
-          developer.log("Inspecting ${step.step} postprocessing output:n processedOutput");
+          developer.log(
+            "Inspecting ${step.step} postprocessing output:n processedOutput",
+          );
           developer.inspect(processedOutput);
         }
 
@@ -686,13 +856,14 @@ class InferenceService {
         // check whether task is classification or object detection
         // image classification map_labels takes a List of floats as input
         // object detection map_labels takes a Map<int, List<Map<String, dynamic>>>
-        
+
         if (processedOutput is Map) {
           debugPrint("Mapping labels assuming object detection task.");
-          
+
           // grabbing detection class index tensor for label mapping
           String detectionClassTensorName = step.params['class_tensor'];
-          dynamic detectionClassTensor = outputTensors[detectionClassTensorName];
+          dynamic detectionClassTensor =
+              outputTensors[detectionClassTensorName];
           if (kDebugMode) {
             developer.log("Inspecting detection class tensor...");
             developer.inspect(detectionClassTensor);
@@ -703,13 +874,16 @@ class InferenceService {
             int detectionCount = 1;
             // loop through detections
             for (var detectionMap in processedOutput[i]!) {
-              debugPrint("Mapping label ${_labels?[detectionMap['original_index']]} to detection $detectionCount");
-              detectionMap['label'] = _labels?[detectionClassTensor[0][detectionMap['original_index']].toInt()];
+              debugPrint(
+                "Mapping label ${_labels?[detectionMap['original_index']]} to detection $detectionCount",
+              );
+              detectionMap['label'] =
+                  _labels?[detectionClassTensor[0][detectionMap['original_index']]
+                      .toInt()];
               detectionCount++;
             }
           }
-        }
-        else if (processedOutput is List) {
+        } else if (processedOutput is List) {
           debugPrint("Mapping labels assuming image classification task");
           // create recognitions, which is a list of labels mapped to a value in the raw output tensor
           List<Map<String, dynamic>> recognitions = [];
@@ -723,17 +897,21 @@ class InferenceService {
             developer.inspect(classTensor);
           }
           // check if processedOutput is a nested list
-          debugPrint("Checking if processedOutput type = ${processedOutput.runtimeType} is a nested list.");
+          debugPrint(
+            "Checking if processedOutput type = ${processedOutput.runtimeType} is a nested list.",
+          );
           if (isNestedList(processedOutput)) {
             debugPrint("Flattening processedOutput nested List.");
-            List<dynamic> flattenedProcessedOutput = processedOutput.expand((x) => x).toList();
+            List<dynamic> flattenedProcessedOutput =
+                processedOutput.expand((x) => x).toList();
             tempOutput = flattenedProcessedOutput;
-          }
-          else {
+          } else {
             tempOutput = processedOutput;
           }
-          debugPrint("Map label debug message: tempOutput type = ${tempOutput.runtimeType}");
-          for (int i=0; i<tempOutput.length; i++) {
+          debugPrint(
+            "Map label debug message: tempOutput type = ${tempOutput.runtimeType}",
+          );
+          for (int i = 0; i < tempOutput.length; i++) {
             recognitions.add({
               "index": i,
               "label": _labels![i],
@@ -742,15 +920,17 @@ class InferenceService {
           }
           // set the processed output to the recognition list
           processedOutput = recognitions;
-        // filters object detections by some threshold
-        // expects a tensor, or a List<dynamic> in Dart
+          // filters object detections by some threshold
+          // expects a tensor, or a List<dynamic> in Dart
         }
         if (kDebugMode) {
           debugPrint("Finished ${step.step} postprocessing step.");
-          developer.log("Inspecting ${step.step} postprocessing output: processedOutput");
+          developer.log(
+            "Inspecting ${step.step} postprocessing output: processedOutput",
+          );
           developer.inspect(processedOutput);
         }
-       
+
       // filters object detections by some threshold
       // expects a tensor, or a List<dynamic> in Dart
       case 'filter_by_score':
@@ -759,38 +939,54 @@ class InferenceService {
         scoreTensor = outputTensors[scoreTensorName];
         String numDetectionsTensorName = step.params['num_detections_tensor'];
         dynamic numDetectionsTensor = outputTensors[numDetectionsTensorName];
-        final int numDetections = (numDetectionsTensor is List ? numDetectionsTensor[0] as num : numDetectionsTensor as num).toInt();
-        
+        final int numDetections =
+            (numDetectionsTensor is List
+                    ? numDetectionsTensor[0] as num
+                    : numDetectionsTensor as num)
+                .toInt();
+
         // set threshold according to YAML file, default to 0.5 if none found
-        double threshold = (step.params['threshold'] as num?)?.toDouble() ?? 0.5;
+        double threshold =
+            (step.params['threshold'] as num?)?.toDouble() ?? 0.5;
         Map<int, List<int>> filteredDetectionIndices = {};
-        debugPrint("Filtering ${scoreTensor[0].length} detections with threshold $threshold...");
+        debugPrint(
+          "Filtering ${scoreTensor[0].length} detections with threshold $threshold...",
+        );
 
         // loop through each batch of score tensors
         for (int i = 0; i < scoreTensor.length; i++) {
-          filteredDetectionIndices[i] = <int>[]; // Initialize the list for each batch
+          filteredDetectionIndices[i] =
+              <int>[]; // Initialize the list for each batch
           for (int j = 0; j < numDetections; j++) {
             debugPrint("scoreTensor[$i][$j] = ${scoreTensor[i][j]}");
             debugPrint("threshold = $threshold");
-            debugPrint("scoreTensor[$i][$j] > threshold = ${scoreTensor[i][j] > threshold}");
+            debugPrint(
+              "scoreTensor[$i][$j] > threshold = ${scoreTensor[i][j] > threshold}",
+            );
             if (scoreTensor[i][j] > threshold) {
               filteredDetectionIndices[i]!.add(j);
             }
           }
         }
-        
-        debugPrint("InferenceService: Filtered ${filteredDetectionIndices[0]!.length} detections above threshold $threshold");
+
+        debugPrint(
+          "InferenceService: Filtered ${filteredDetectionIndices[0]!.length} detections above threshold $threshold",
+        );
         if (kDebugMode) {
-          developer.log("Inspecting ${step.step} postprocessing variable: filteredDetectionIndices");
+          developer.log(
+            "Inspecting ${step.step} postprocessing variable: filteredDetectionIndices",
+          );
           developer.inspect(filteredDetectionIndices);
         }
         // This step's output (filteredIndices) becomes processedData for the next step.
         processedOutput = filteredDetectionIndices;
 
         if (kDebugMode) {
-            debugPrint("Finished ${step.step} postprocessing step.");
-            developer.log("Inspecting ${step.step} postprocessing output: processedOutput");
-            developer.inspect(processedOutput);
+          debugPrint("Finished ${step.step} postprocessing step.");
+          developer.log(
+            "Inspecting ${step.step} postprocessing output: processedOutput",
+          );
+          developer.inspect(processedOutput);
         }
 
       // uses filtered indices and later on the coordinate format config to construct the final detection tensors
@@ -799,12 +995,16 @@ class InferenceService {
         // Expects processedOutput (from previous step) to be the list of filtered indices
         if (processedOutput is! Map<int, List<int>>) {
           throw FormatException(
-              "Step 'decode_boxes' expects Map<int, List<int>> (filtered indices) input. Got ${processedOutput.runtimeType}");
+            "Step 'decode_boxes' expects Map<int, List<int>> (filtered indices) input. Got ${processedOutput.runtimeType}",
+          );
         }
         final params = step.params;
         final boxTensorName = params['box_tensor'] as String?;
-        if (boxTensorName == null || !outputTensors.containsKey(boxTensorName)) {
-          throw Exception("decode_boxes requires a valid 'box_tensor' param pointing to a raw output.");
+        if (boxTensorName == null ||
+            !outputTensors.containsKey(boxTensorName)) {
+          throw Exception(
+            "decode_boxes requires a valid 'box_tensor' param pointing to a raw output.",
+          );
         }
         // define raw box Map, generalizing for multiple batch detection box tensors
         final Map<int, List<List<dynamic>>> boxesRaw = {};
@@ -823,25 +1023,37 @@ class InferenceService {
             if (index < boxesRaw[i]!.length) {
               // initialize the map for each detection
               // Convert box coordinates to double
-              final box = boxesRaw[i]?[index].map((val) => (val as num).toDouble()).toList();
-              if (box?.length == 4) { // Basic validation
+              final box =
+                  boxesRaw[i]?[index]
+                      .map((val) => (val as num).toDouble())
+                      .toList();
+              if (box?.length == 4) {
+                // Basic validation
                 debugPrint("Adding box coordinates: $box");
                 decodedData[i]!.add({
-                  "original_index": index, // Preserve original index for later mapping
+                  "original_index":
+                      index, // Preserve original index for later mapping
                   "score": scoreTensor[i]?[index],
-                  "raw_box": box, // Pass raw normalized box [ymin, xmin, ymax, xmax] or other format
+                  "raw_box":
+                      box, // Pass raw normalized box [ymin, xmin, ymax, xmax] or other format
                 });
               } else {
-                debugPrint("InferenceService: Warning: Box at index $index does not have 4 coordinates in decode_boxes.");
+                debugPrint(
+                  "InferenceService: Warning: Box at index $index does not have 4 coordinates in decode_boxes.",
+                );
               }
             } else {
-              debugPrint("InferenceService: Warning: Index $index out of bounds for boxesRaw (length ${boxesRaw.length}) in decode_boxes.");
+              debugPrint(
+                "InferenceService: Warning: Index $index out of bounds for boxesRaw (length ${boxesRaw.length}) in decode_boxes.",
+              );
             }
           }
         }
-        
+
         if (kDebugMode) {
-          developer.log("Inspecting ${step.step} postprocessing variable: decodedData");
+          developer.log(
+            "Inspecting ${step.step} postprocessing variable: decodedData",
+          );
           developer.inspect(decodedData);
         }
         // This map of a list of maps becomes processedData for the next step
@@ -849,20 +1061,20 @@ class InferenceService {
 
         if (kDebugMode) {
           debugPrint("Finished ${step.step} postprocessing step.");
-          developer.log("Inspecting ${step.step} postprocessing output: processedOutput");
+          developer.log(
+            "Inspecting ${step.step} postprocessing output: processedOutput",
+          );
           developer.inspect(processedOutput);
         }
 
-
       default:
         if (kDebugMode) {
-          debugPrint("Warning: Unsupported postprocessing step: ${step.step}"); 
+          debugPrint("Warning: Unsupported postprocessing step: ${step.step}");
         }
     }
 
     return processedOutput;
   }
-
 }
 
 
