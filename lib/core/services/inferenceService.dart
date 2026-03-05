@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -15,6 +16,7 @@ import '../data_models/inference_result_model.dart';
 import '../utils/list_extensions.dart';
 import '../utils/data_types.dart';
 import '../utils/math.dart';
+import 'tokenizer_service.dart';
 
 // inference class that contains methods for loading models, pre and post processing, and running the actual inference
 class InferenceService {
@@ -23,6 +25,10 @@ class InferenceService {
   Pipeline? modelPipeline;
 
   List<String>? _labels;
+  TokenizerService? _tokenizer;
+  // Stores the preprocessed inputs from the last performInference call.
+  // Used by the autoregressive 'generate' postprocessing step.
+  Map<String, dynamic> _lastPreprocessedInputs = {};
   bool get isReady => _interpreter != null && modelPipeline != null;
 
   dynamic scoreTensor;
@@ -50,6 +56,7 @@ class InferenceService {
     ); // Load pipeline first to get model info if needed
     await loadModel(modelPath); // Load model
     await loadLabelsIfNeeded(); // Load labels if needed by any postprocessing step
+    await loadTokenizerIfNeeded(); // Load tokenizer if any preprocessing block uses text input
   }
 
   // load model from model_path (AKA create an interpreter)
@@ -59,7 +66,7 @@ class InferenceService {
   }) async {
     if (modelFramework == "tflite") {
       debugPrint("Loading TFLite model from $modelPath...");
-      final options = InterpreterOptions();
+      final options = InterpreterOptions()..threads = 4;
 
       try {
         _interpreter = isLocalFile
@@ -164,6 +171,42 @@ class InferenceService {
           "InferenceService: No 'labels_url' found in any 'map_labels' postprocessing step.",
         );
       }
+    }
+  }
+
+  Future<void> loadTokenizerIfNeeded() async {
+    if (modelPipeline == null) return;
+
+    // Only load if at least one preprocessing block handles text input
+    final hasTextInput = modelPipeline!.preprocessing.any(
+      (b) => b.expects_type == 'text',
+    );
+    if (!hasTextInput) return;
+
+    // Find optional explicit file references from the tokenize step params
+    String? vocabFile;
+    String? tokenizerFile;
+    for (final block in modelPipeline!.preprocessing) {
+      for (final step in block.steps) {
+        if (step.step == 'tokenize') {
+          vocabFile = step.params['vocab_file'] as String?;
+          tokenizerFile = step.params['tokenizer_file'] as String?;
+          break;
+        }
+      }
+    }
+
+    _tokenizer = await TokenizerService.load(
+      vocabPath: vocabFile,
+      tokenizerJsonPath: tokenizerFile,
+      isLocalFile: isLocalFile,
+      localDir: localDir,
+    );
+
+    if (_tokenizer == null) {
+      debugPrint('[InferenceService] Warning: text input detected but no tokenizer could be loaded.');
+    } else {
+      debugPrint('[InferenceService] Tokenizer loaded successfully.');
     }
   }
 
@@ -362,16 +405,24 @@ class InferenceService {
     debugPrint(
       "Checking if source tensors are present in all postprocessing blocks...",
     );
-    // check that all source tensors in the postprocessing block are present in the output map
-    List<String> sourceTensors = block.source_tensors;
-    for (var tensor in sourceTensors) {
-      if (!rawOutputs.containsKey(tensor)) {
-        if (kDebugMode) {
-          debugPrint(
-            "Output map does not contain source tensor: $tensor. Aborting postprocessing and returning raw output unchanged.",
-          );
+    // Autoregressive generate blocks produce their own output internally —
+    // they don't read from rawOutputs, so skip the source tensor check.
+    final bool isAutoregressiveBlock = block.steps.isNotEmpty &&
+        block.steps.first.step == 'generate' &&
+        (block.steps.first.params['mode'] as String?) == 'autoregressive';
+
+    if (!isAutoregressiveBlock) {
+      // check that all source tensors in the postprocessing block are present in the output map
+      List<String> sourceTensors = block.source_tensors;
+      for (var tensor in sourceTensors) {
+        if (!rawOutputs.containsKey(tensor)) {
+          if (kDebugMode) {
+            debugPrint(
+              "Output map does not contain source tensor: $tensor. Aborting postprocessing and returning raw output unchanged.",
+            );
+          }
+          return currentResult;
         }
-        return currentResult;
       }
     }
 
@@ -675,6 +726,44 @@ class InferenceService {
 
         return finalData;
 
+      // tokenize text input to a tensor of token IDs
+      case 'tokenize':
+        if (_tokenizer == null) {
+          throw StateError(
+            "Preprocessing step 'tokenize' requires a tokenizer, but none was loaded. "
+            "Ensure the model has a tokenizer.json or vocab.txt asset.",
+          );
+        }
+        if (inputData is! String) {
+          throw ArgumentError(
+            "Step 'tokenize' expects a String input, got ${inputData.runtimeType}.",
+          );
+        }
+        final int paramMaxLength = (step.params['max_length'] as num?)?.toInt() ?? 512;
+        // Use the interpreter's actual input tensor shape — the pipeline-declared
+        // max_length may have been incorrectly generated (e.g. from n_ctx in config.json
+        // rather than the TFLite model's baked-in positional embedding size).
+        final int maxLength = _getModelInputSeqLen(fallback: paramMaxLength);
+        if (kDebugMode && maxLength != paramMaxLength) {
+          debugPrint('[InferenceService] tokenize: pipeline max_length=$paramMaxLength overridden by actual model input shape=$maxLength.');
+        }
+        final bool padding = step.params['padding'] as bool? ?? true;
+        final bool truncation = step.params['truncation'] as bool? ?? true;
+        final bool addSpecialTokens = step.params['add_special_tokens'] as bool? ?? true;
+
+        final List<int> tokenIds = _tokenizer!.encode(
+          inputData,
+          maxLength: maxLength,
+          padding: padding,
+          truncation: truncation,
+          addSpecialTokens: addSpecialTokens,
+        );
+        if (kDebugMode) {
+          debugPrint('[InferenceService] Tokenized to ${tokenIds.length} token IDs.');
+        }
+        // Wrap in an outer list to match shape [1, sequenceLength]
+        return [tokenIds];
+
       default:
         if (kDebugMode) {
           debugPrint("Warning: Unsupported preprocessing step: ${step.step}");
@@ -698,6 +787,7 @@ class InferenceService {
     }
 
     // preprocess inputs and construct the final input list for inference
+    _lastPreprocessedInputs = {};
     List<Object> processedInputs = [];
     for (var input in inferenceInputs.entries) {
       var tempInput = input.value;
@@ -708,36 +798,43 @@ class InferenceService {
         }
         break;
       }
+      // store for use by the autoregressive generate step
+      _lastPreprocessedInputs[input.key] = tempInput;
       // add input to the final processInputs list
       processedInputs.add(tempInput);
     }
 
-    // create ouput buffers
-    Map<int, Object> outputBuffers = {};
+    // Create output buffers for EVERY model output tensor.
+    // tflite_flutter's runForMultipleInputs asserts outputs[i] != null for all
+    // interpreter tensors, so we must cover any extra tensors beyond the pipeline.
     List<IO> outputs = modelPipeline!.outputs;
-    for (int i = 0; i < outputs.length; i++) {
-      outputBuffers[i] = _createOutputBuffer(
-        outputs[i].shape,
-        outputs[i].dtype,
-      );
-    }
 
-    if (kDebugMode) {
-      debugPrint("Running inference on model.");
-    }
-    _interpreter?.runForMultipleInputs(processedInputs, outputBuffers);
-    debugPrint("Inference completed.");
-    if (kDebugMode) {
-      developer.log(
-        "Inspecting outputBuffers variable from the TFLite inference.",
-      );
-      developer.inspect(outputBuffers);
-    }
+    // Skip the initial inference pass for autoregressive pipelines — the
+    // 'generate' postprocessing step runs its own loop from _lastPreprocessedInputs
+    // and ignores this output entirely, so running it here is wasted work.
+    final bool isAutoregressive = modelPipeline!.postprocessing.any(
+      (block) => block.steps.any((s) => s.step == 'generate' && (s.params['mode'] as String?) == 'autoregressive'),
+    );
 
-    // convert outputBuffers map to a String-keyed map using the output tensor names
     Map<String, dynamic> inferenceOutputs = {};
-    for (int i = 0; i < outputBuffers.length; i++) {
-      inferenceOutputs[modelPipeline!.outputs[i].name] = outputBuffers[i];
+    if (!isAutoregressive) {
+      Map<int, Object> outputBuffers = _buildOutputBuffers(outputs);
+      if (kDebugMode) {
+        debugPrint("Running inference on model.");
+      }
+      _interpreter?.runForMultipleInputs(processedInputs, outputBuffers);
+      debugPrint("Inference completed.");
+      if (kDebugMode) {
+        developer.log("Inspecting outputBuffers variable from the TFLite inference.");
+        developer.inspect(outputBuffers);
+      }
+      for (int i = 0; i < outputs.length; i++) {
+        inferenceOutputs[outputs[i].name] = outputBuffers[i];
+      }
+    } else {
+      if (kDebugMode) {
+        debugPrint("Autoregressive pipeline — skipping initial inference pass.");
+      }
     }
 
     // define the final results map, which will contain the final output from the model inference
@@ -788,6 +885,42 @@ class InferenceService {
     }
   }
 
+  /// Converts a tflite_flutter [TensorType] to the dtype string used by the pipeline schema.
+  String _tensorTypeToDtype(TensorType type) {
+    switch (type) {
+      case TensorType.float32: return 'float32';
+      case TensorType.int32:   return 'int32';
+      case TensorType.uint8:   return 'uint8';
+      case TensorType.int8:    return 'int8';
+      default:                 return 'float32';
+    }
+  }
+
+  /// Builds the output buffer map for [runForMultipleInputs].
+  ///
+  /// tflite_flutter iterates over ALL interpreter output tensors and asserts
+  /// each map entry is non-null. If the pipeline declares fewer outputs than
+  /// the model has, the missing indices would crash with a null check error.
+  /// This method creates a buffer for every actual output tensor.
+  Map<int, Object> _buildOutputBuffers(List<IO> pipelineOutputs) {
+    final actualTensors = _interpreter!.getOutputTensors();
+    final buffers = <int, Object>{};
+    for (int i = 0; i < actualTensors.length; i++) {
+      final List<int> shape;
+      final String dtype;
+      if (i < pipelineOutputs.length) {
+        shape = _getActualOutputShape(i, pipelineOutputs[i].shape);
+        dtype = pipelineOutputs[i].dtype;
+      } else {
+        // Extra model output not declared in the pipeline — infer from the tensor.
+        shape = List<int>.from(actualTensors[i].shape);
+        dtype = _tensorTypeToDtype(actualTensors[i].type);
+      }
+      buffers[i] = _createOutputBuffer(shape, dtype);
+    }
+    return buffers;
+  }
+
   // helper method to create an output buffer, given an output shape and data type
   dynamic _createOutputBuffer(List<int> shape, String dtype) {
     int totalElements = shape.reduce((a, b) => a * b);
@@ -795,6 +928,10 @@ class InferenceService {
       case 'float32':
         return ListShape(List.filled(totalElements, 0.0)).reshape(shape);
       case 'uint8':
+      case 'int8':
+        return ListShape(List.filled(totalElements, 0)).reshape(shape);
+      case 'int32':
+        // TFLite Flutter represents int32 tensors as List<int>
         return ListShape(List.filled(totalElements, 0)).reshape(shape);
       default:
         throw Exception("Unsupported output dtype: $dtype");
@@ -1067,6 +1204,106 @@ class InferenceService {
           developer.inspect(processedOutput);
         }
 
+      // autoregressive decode loop or single-pass pass-through
+      case 'generate':
+        final String mode = step.params['mode'] as String? ?? 'single_pass';
+        if (mode == 'single_pass') {
+          // Single-pass: model already ran, output tensor is the token ID sequence.
+          // Nothing to do here — decode_tokens handles the rest.
+          break;
+        }
+
+        // Autoregressive: run the model in a loop, appending one token at a time.
+        if (_interpreter == null || modelPipeline == null) {
+          throw StateError("Cannot run autoregressive generation: interpreter not ready.");
+        }
+        if (_tokenizer == null) {
+          throw StateError("Cannot run autoregressive generation: tokenizer not loaded.");
+        }
+
+        final int maxNewTokens = (step.params['max_new_tokens'] as num?)?.toInt() ?? 128;
+        final double temperature = (step.params['temperature'] as num?)?.toDouble() ?? 0.8;
+        final bool doSample = step.params['do_sample'] as bool? ?? true;
+        final int? eosTokenId = (step.params['eos_token_id'] as num?)?.toInt();
+        final double repetitionPenalty = (step.params['repetition_penalty'] as num?)?.toDouble() ?? 1.3;
+
+        // Get initial token IDs from the preprocessed input (first text input).
+        // _lastPreprocessedInputs is keyed by input tensor name; value is [List<int>].
+        List<int> currentIds = [];
+        for (final entry in _lastPreprocessedInputs.entries) {
+          final val = entry.value;
+          if (val is List && val.isNotEmpty && val.first is List) {
+            currentIds = List<int>.from((val.first as List).map((e) => (e as num).toInt()));
+          } else if (val is List<int>) {
+            currentIds = List<int>.from(val);
+          }
+          if (currentIds.isNotEmpty) break;
+        }
+
+        if (currentIds.isEmpty) {
+          throw StateError("Autoregressive generation: could not extract input token IDs.");
+        }
+
+        // Trim padding from initial input before generating
+        final int padId = _tokenizer!.padId;
+        currentIds = currentIds.where((id) => id != padId).toList();
+
+        final int expectedSeqLen = _getModelInputSeqLen(fallback: currentIds.length);
+
+        if (kDebugMode) {
+          debugPrint('[Generate] Dispatching to background isolate: '
+              'promptLen=${currentIds.length}, maxNewTokens=$maxNewTokens, '
+              'eosId=$eosTokenId, padId=$padId, seqLen=$expectedSeqLen');
+          debugPrint('[Generate] Prompt decoded: "${_tokenizer!.decode(currentIds, skipSpecialTokens: false)}"');
+        }
+
+        if (!isLocalFile) {
+          throw StateError(
+            'Autoregressive generation requires a local model file. '
+            'Asset-bundled models are not supported for autoregressive text generation.',
+          );
+        }
+
+        // Run the generate loop in a background Dart isolate so the main
+        // thread — and Flutter's rendering loop — are never blocked.
+        final List<int> generatedTokens = await compute(
+          _runGenerateIsolate,
+          _GenerateRequest(
+            modelPath: modelPath,
+            inputIds: currentIds,
+            seqLen: expectedSeqLen,
+            padId: padId,
+            eosTokenId: eosTokenId,
+            maxNewTokens: maxNewTokens,
+            temperature: temperature,
+            doSample: doSample,
+            repetitionPenalty: repetitionPenalty,
+          ),
+        );
+
+        processedOutput = generatedTokens;
+        if (kDebugMode) {
+          debugPrint('[Generate] Done: ${generatedTokens.length} tokens. '
+              'First 20 IDs: ${generatedTokens.take(20).toList()}');
+        }
+
+      // decode a list of token IDs back to a string
+      case 'decode_tokens':
+        if (_tokenizer == null) {
+          throw StateError(
+            "Postprocessing step 'decode_tokens' requires a tokenizer, but none was loaded.",
+          );
+        }
+        final bool skipSpecial = step.params['skip_special_tokens'] as bool? ?? true;
+
+        // Flatten nested lists to a flat List<int>
+        List<int> ids = _flattenToIntList(processedOutput);
+        processedOutput = _tokenizer!.decode(ids, skipSpecialTokens: skipSpecial);
+
+        if (kDebugMode) {
+          debugPrint("[InferenceService] Decoded ${ids.length} token IDs to text.");
+        }
+
       default:
         if (kDebugMode) {
           debugPrint("Warning: Unsupported postprocessing step: ${step.step}");
@@ -1075,6 +1312,189 @@ class InferenceService {
 
     return processedOutput;
   }
+
+  /// Returns the actual output tensor shape from the TFLite interpreter for [index].
+  /// Falls back to [fallbackShape] if the interpreter is unavailable.
+  List<int> _getActualOutputShape(int index, List<int> fallbackShape) {
+    if (_interpreter != null) {
+      try {
+        final tensors = _interpreter!.getOutputTensors();
+        if (index < tensors.length) {
+          return List<int>.from(tensors[index].shape);
+        }
+      } catch (_) {}
+    }
+    return fallbackShape;
+  }
+
+  /// Returns the actual input sequence length from the TFLite interpreter.
+  /// Falls back to the pipeline-declared shape, then to [fallback].
+  int _getModelInputSeqLen({int fallback = 512}) {
+    if (_interpreter != null) {
+      try {
+        final tensors = _interpreter!.getInputTensors();
+        if (tensors.isNotEmpty && tensors[0].shape.length >= 2) {
+          return tensors[0].shape[1];
+        }
+      } catch (_) {}
+    }
+    if (modelPipeline != null &&
+        modelPipeline!.inputs.isNotEmpty &&
+        modelPipeline!.inputs[0].shape.length >= 2) {
+      return modelPipeline!.inputs[0].shape[1];
+    }
+    return fallback;
+  }
+
+  // Flatten any nested list structure to a flat List<int>
+  List<int> _flattenToIntList(dynamic value) {
+    if (value is List<int>) return value;
+    if (value is List) {
+      final result = <int>[];
+      for (final item in value) {
+        result.addAll(_flattenToIntList(item));
+      }
+      return result;
+    }
+    if (value is num) return [value.toInt()];
+    return [];
+  }
+
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Background isolate support for autoregressive generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// All data needed to run the generate loop in a background isolate.
+/// Only sendable types (primitives + integer lists) so it can cross isolate boundaries.
+class _GenerateRequest {
+  final String modelPath;
+  final List<int> inputIds;
+  final int seqLen;
+  final int padId;
+  final int? eosTokenId;
+  final int maxNewTokens;
+  final double temperature;
+  final bool doSample;
+  final double repetitionPenalty;
+
+  const _GenerateRequest({
+    required this.modelPath,
+    required this.inputIds,
+    required this.seqLen,
+    required this.padId,
+    this.eosTokenId,
+    required this.maxNewTokens,
+    required this.temperature,
+    required this.doSample,
+    required this.repetitionPenalty,
+  });
+}
+
+/// Top-level function executed by [compute()].
+///
+/// Creates a fresh Interpreter inside the background isolate — native objects
+/// cannot be shared across isolate boundaries. Runs the full autoregressive
+/// loop, closes the interpreter, and returns the generated token IDs.
+List<int> _runGenerateIsolate(_GenerateRequest req) {
+  // Bounded exp helper — avoids float overflow in softmax.
+  double boundedExp(double x) {
+    if (x > 88) return 1.5e38;
+    if (x < -88) return 0.0;
+    return math.exp(x);
+  }
+
+  // Build output buffers from the interpreter's actual tensor metadata.
+  Map<int, Object> buildBuffers(Interpreter interp) {
+    final tensors = interp.getOutputTensors();
+    final buffers = <int, Object>{};
+    for (int i = 0; i < tensors.length; i++) {
+      final shape = List<int>.from(tensors[i].shape);
+      final total = shape.reduce((a, b) => a * b);
+      buffers[i] = tensors[i].type == TensorType.float32
+          ? ListShape(List<double>.filled(total, 0.0)).reshape(shape)
+          : ListShape(List<int>.filled(total, 0)).reshape(shape);
+    }
+    return buffers;
+  }
+
+  final options = InterpreterOptions()..threads = 4;
+  final interpreter = Interpreter.fromFile(File(req.modelPath), options: options);
+
+  List<int> currentIds = List<int>.from(req.inputIds);
+  final List<int> generatedTokens = [];
+
+  for (int step = 0; step < req.maxNewTokens; step++) {
+    // Sliding window: keep the most recent seqLen tokens.
+    final List<int> contextIds = currentIds.length > req.seqLen
+        ? currentIds.sublist(currentIds.length - req.seqLen)
+        : currentIds;
+
+    // Right-pad so real tokens are at the front; causal attention means pad
+    // positions at the back cannot influence earlier positions' outputs.
+    final List<int> paddedIds = contextIds.length < req.seqLen
+        ? [...contextIds, ...List.filled(req.seqLen - contextIds.length, req.padId)]
+        : List<int>.from(contextIds);
+
+    final Map<int, Object> buffers = buildBuffers(interpreter);
+    interpreter.runForMultipleInputs([[paddedIds]], buffers);
+
+    // logits shape: [1, seqLen, vocabSize] or [1, vocabSize]
+    final dynamic raw = buffers[0];
+    final int lastRealPos = contextIds.length - 1;
+    List<dynamic> lastLogits;
+    if (raw is List && raw.isNotEmpty) {
+      final batch = raw[0] as List;
+      lastLogits = (batch.isNotEmpty && batch[0] is List)
+          ? batch[lastRealPos] as List<dynamic>
+          : batch.cast<dynamic>();
+    } else {
+      break;
+    }
+
+    // Repetition penalty (HuggingFace convention).
+    List<double> logits = lastLogits.map((v) => (v as num).toDouble()).toList();
+    if (req.repetitionPenalty != 1.0) {
+      final seen = <int>{...currentIds, ...generatedTokens};
+      for (final id in seen) {
+        if (id >= 0 && id < logits.length) {
+          logits[id] = logits[id] > 0
+              ? logits[id] / req.repetitionPenalty
+              : logits[id] * req.repetitionPenalty;
+        }
+      }
+    }
+
+    // Greedy argmax or temperature sampling.
+    int nextToken;
+    if (!req.doSample || req.temperature <= 0.0) {
+      nextToken = 0;
+      double best = logits[0];
+      for (int i = 1; i < logits.length; i++) {
+        if (logits[i] > best) { best = logits[i]; nextToken = i; }
+      }
+    } else {
+      final scaled = logits.map((v) => v / req.temperature).toList();
+      final maxVal = scaled.reduce((a, b) => a > b ? a : b);
+      final exps = scaled.map((v) => boundedExp(v - maxVal)).toList();
+      final sum = exps.reduce((a, b) => a + b);
+      final probs = exps.map((v) => v / sum).toList();
+      double r = math.Random().nextDouble();
+      nextToken = probs.length - 1;
+      for (int i = 0; i < probs.length; i++) {
+        r -= probs[i];
+        if (r <= 0) { nextToken = i; break; }
+      }
+    }
+
+    generatedTokens.add(nextToken);
+    if (req.eosTokenId != null && nextToken == req.eosTokenId) break;
+    currentIds = [...currentIds, nextToken];
+  }
+
+  interpreter.close();
+  return generatedTokens;
 }
 
 

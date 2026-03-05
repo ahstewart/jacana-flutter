@@ -14,6 +14,7 @@ import 'core/providers/model_providers.dart';
 import 'package:yaml/yaml.dart';
 import 'dart:convert';
 import 'features/object_detection/object_detection.dart';
+import 'features/text_generation/text_generation.dart';
 import 'package:path_provider/path_provider.dart';
 
 // Returns free bytes available on the filesystem containing [dirPath], or null on failure.
@@ -164,7 +165,74 @@ class DownloadedModelsNotifier extends StateNotifier<List<DownloadedModel>> {
   }
 }
 
+// Model for tracking an in-progress model download
+class InProgressDownload {
+  final String versionId;
+  final String modelName;
+  final String versionName;
+  final int completedSteps;
+  final int totalSteps;
+
+  InProgressDownload({
+    required this.versionId,
+    required this.modelName,
+    required this.versionName,
+    required this.completedSteps,
+    required this.totalSteps,
+  });
+
+  double get progress => totalSteps > 0 ? completedSteps / totalSteps : 0.0;
+
+  InProgressDownload copyWith({int? completedSteps}) => InProgressDownload(
+    versionId: versionId,
+    modelName: modelName,
+    versionName: versionName,
+    completedSteps: completedSteps ?? this.completedSteps,
+    totalSteps: totalSteps,
+  );
+}
+
+final inProgressDownloadsProvider = StateNotifierProvider<
+    InProgressDownloadsNotifier, Map<String, InProgressDownload>>(
+  (ref) => InProgressDownloadsNotifier(),
+);
+
+class InProgressDownloadsNotifier
+    extends StateNotifier<Map<String, InProgressDownload>> {
+  InProgressDownloadsNotifier() : super({});
+
+  void startDownload(InProgressDownload download) {
+    state = {...state, download.versionId: download};
+  }
+
+  void updateProgress(String versionId, int completedSteps) {
+    final current = state[versionId];
+    if (current == null) return;
+    state = {
+      ...state,
+      versionId: current.copyWith(completedSteps: completedSteps),
+    };
+  }
+
+  void finishDownload(String versionId) {
+    final updated = Map<String, InProgressDownload>.from(state)
+      ..remove(versionId);
+    state = updated;
+  }
+}
+
 // Widget containing the model tile list
+String _friendlyTask(String category) => category
+    .split('_')
+    .map((w) => w.isEmpty ? '' : '${w[0].toUpperCase()}${w.substring(1)}')
+    .join(' ');
+
+String _formatCount(int n) {
+  if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
+  if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
+  return '$n';
+}
+
 class Models extends ConsumerStatefulWidget {
   const Models({super.key});
 
@@ -176,6 +244,7 @@ class _ModelsState extends ConsumerState<Models> {
   final _searchController = TextEditingController();
   String _searchQuery = '';
   String? _selectedCategory;
+  String _sortOrder = 'downloads'; // 'downloads' | 'rating' | 'newest'
 
   @override
   void dispose() {
@@ -197,7 +266,7 @@ class _ModelsState extends ConsumerState<Models> {
         final categories = modelList.map((m) => m.category).toSet().toList()..sort();
 
         // Apply search and category filters
-        final filtered = modelList.where((m) {
+        var filtered = modelList.where((m) {
           final q = _searchQuery.toLowerCase();
           final matchesSearch = q.isEmpty ||
               m.name.toLowerCase().contains(q) ||
@@ -206,6 +275,21 @@ class _ModelsState extends ConsumerState<Models> {
               _selectedCategory == null || m.category == _selectedCategory;
           return matchesSearch && matchesCategory;
         }).toList();
+
+        // Apply sort
+        switch (_sortOrder) {
+          case 'rating':
+            filtered.sort(
+              (a, b) => b.rating_weighted_avg.compareTo(a.rating_weighted_avg),
+            );
+          case 'newest':
+            filtered.sort((a, b) => b.created_at.compareTo(a.created_at));
+          default:
+            filtered.sort(
+              (a, b) =>
+                  b.total_download_count.compareTo(a.total_download_count),
+            );
+        }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -236,36 +320,66 @@ class _ModelsState extends ConsumerState<Models> {
                 onChanged: (v) => setState(() => _searchQuery = v),
               ),
             ),
-            // Category filter chips
-            SizedBox(
-              height: 44,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+            // Task filter chips + sort button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 8, 4),
+              child: Row(
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: FilterChip(
-                      label: const Text('All'),
-                      selected: _selectedCategory == null,
-                      onSelected: (_) => setState(() => _selectedCategory = null),
-                    ),
-                  ),
-                  for (final category in categories)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: FilterChip(
-                        label: Text(category),
-                        selected: _selectedCategory == category,
-                        onSelected: (selected) => setState(
-                          () => _selectedCategory = selected ? category : null,
-                        ),
+                  Expanded(
+                    child: SizedBox(
+                      height: 40,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: FilterChip(
+                              label: const Text('All'),
+                              selected: _selectedCategory == null,
+                              onSelected: (_) =>
+                                  setState(() => _selectedCategory = null),
+                            ),
+                          ),
+                          for (final category in categories)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 4),
+                              child: FilterChip(
+                                label: Text(_friendlyTask(category)),
+                                selected: _selectedCategory == category,
+                                onSelected: (selected) => setState(
+                                  () => _selectedCategory =
+                                      selected ? category : null,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.sort),
+                    tooltip: 'Sort by',
+                    initialValue: _sortOrder,
+                    onSelected: (v) => setState(() => _sortOrder = v),
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                        value: 'downloads',
+                        child: Text('Most Downloaded'),
+                      ),
+                      PopupMenuItem(
+                        value: 'rating',
+                        child: Text('Top Rated'),
+                      ),
+                      PopupMenuItem(
+                        value: 'newest',
+                        child: Text('Newest'),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
-            const SizedBox(height: 4),
             // Model list or empty state
             if (filtered.isEmpty)
               const Expanded(
@@ -273,28 +387,17 @@ class _ModelsState extends ConsumerState<Models> {
               )
             else
               Expanded(
-                child: SingleChildScrollView(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Wrap(
-                      spacing: 16.0,
-                      runSpacing: 16.0,
-                      children: [
-                        for (MLModel model in filtered)
-                          SizedBox(
-                            width: 300,
-                            child: Card(
-                              child: ListTile(
-                                title: Text(model.name),
-                                subtitle: Text(model.category),
-                                leading: const Icon(Icons.model_training),
-                                onTap: () => _showModelDetailsModal(context, model),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  itemCount: filtered.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) {
+                    final model = filtered[index];
+                    return _ModelCard(
+                      model: model,
+                      onTap: () => _showModelDetailsModal(context, model),
+                    );
+                  },
                 ),
               ),
           ],
@@ -309,6 +412,87 @@ class _ModelsState extends ConsumerState<Models> {
     showDialog(
       context: context,
       builder: (context) => ModelDetailsModal(model: model),
+    );
+  }
+}
+
+class _ModelCard extends StatelessWidget {
+  final MLModel model;
+  final VoidCallback onTap;
+
+  const _ModelCard({required this.model, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Task type badge
+              Chip(
+                label: Text(
+                  _friendlyTask(model.category),
+                  style: TextStyle(
+                    color: cs.onPrimaryContainer,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                backgroundColor: cs.primaryContainer,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              const SizedBox(height: 8),
+              // Model name
+              Text(
+                model.name,
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 4),
+              // Description
+              Text(
+                model.description,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: cs.onSurfaceVariant),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 12),
+              // Stats row
+              Row(
+                children: [
+                  const Icon(Icons.download_outlined, size: 14),
+                  const SizedBox(width: 4),
+                  Text(
+                    _formatCount(model.total_download_count),
+                    style: theme.textTheme.labelSmall,
+                  ),
+                  const SizedBox(width: 16),
+                  const Icon(Icons.star_outline, size: 14),
+                  const SizedBox(width: 4),
+                  Text(
+                    model.total_ratings > 0
+                        ? '${model.rating_weighted_avg.toStringAsFixed(1)} (${_formatCount(model.total_ratings)})'
+                        : 'No ratings yet',
+                    style: theme.textTheme.labelSmall,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -348,26 +532,96 @@ class _ModelDetailsModalState extends ConsumerState<ModelDetailsModal> {
             );
           }
 
+          final theme = Theme.of(context);
+          final cs = theme.colorScheme;
+
           return AlertDialog(
-            title: Text(widget.model.name),
+            contentPadding: EdgeInsets.zero,
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Category: ${widget.model.category}'),
-                  const SizedBox(height: 8),
-                  Text('Description: ${widget.model.description}'),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Supported Versions (${supportedVersions.length}):',
-                    style: Theme.of(context).textTheme.titleSmall,
+                  // ── Header ──────────────────────────────────────────
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Task badge
+                        Chip(
+                          label: Text(
+                            _friendlyTask(widget.model.category),
+                            style: TextStyle(
+                              color: cs.onPrimaryContainer,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          backgroundColor: cs.primaryContainer,
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        const SizedBox(height: 8),
+                        // Model name
+                        Text(
+                          widget.model.name,
+                          style: theme.textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        // Description
+                        Text(
+                          widget.model.description,
+                          style: theme.textTheme.bodyMedium
+                              ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                        const SizedBox(height: 12),
+                        // Aggregate stats row
+                        Row(
+                          children: [
+                            const Icon(Icons.download_outlined, size: 16),
+                            const SizedBox(width: 4),
+                            Text(
+                              _formatCount(widget.model.total_download_count),
+                              style: theme.textTheme.labelMedium,
+                            ),
+                            const SizedBox(width: 20),
+                            const Icon(Icons.star_outline, size: 16),
+                            const SizedBox(width: 4),
+                            Text(
+                              widget.model.total_ratings > 0
+                                  ? '${widget.model.rating_weighted_avg.toStringAsFixed(1)} (${_formatCount(widget.model.total_ratings)})'
+                                  : 'No ratings yet',
+                              style: theme.textTheme.labelMedium,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  ...supportedVersions.map(
-                    (version) => _VersionTile(
-                      version: version,
-                      modelName: widget.model.name,
+                  const Divider(height: 1),
+                  // ── Versions ────────────────────────────────────────
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+                    child: Text(
+                      'Versions (${supportedVersions.length})',
+                      style: theme.textTheme.titleSmall,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: Column(
+                      children: supportedVersions
+                          .map(
+                            (version) => _VersionTile(
+                              version: version,
+                              modelName: widget.model.name,
+                            ),
+                          )
+                          .toList(),
                     ),
                   ),
                 ],
@@ -420,6 +674,9 @@ class _VersionTile extends ConsumerStatefulWidget {
 class _VersionTileState extends ConsumerState<_VersionTile> {
   @override
   Widget build(BuildContext context) {
+    final downloaded = ref.watch(downloadedModelsProvider);
+    final isDownloaded = downloaded.any((m) => m.versionId == widget.version.id);
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8.0),
       child: Padding(
@@ -428,35 +685,60 @@ class _VersionTileState extends ConsumerState<_VersionTile> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Version: ${widget.version.version_name}',
+              widget.version.version_name,
               style: Theme.of(context).textTheme.titleSmall,
             ),
             const SizedBox(height: 8),
-            Text('Status: ${widget.version.status}'),
-            Text('License: ${widget.version.license_type}'),
-            Text(
-              'Size: ${(widget.version.file_size_bytes / 1024 / 1024).toStringAsFixed(2)} MB',
-            ),
-            const SizedBox(height: 12),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                ElevatedButton.icon(
-                  onPressed: _handleDownload,
-                  icon: const Icon(Icons.download),
-                  label: const Text('Download'),
+                const Icon(Icons.download_outlined, size: 14),
+                const SizedBox(width: 4),
+                Text(
+                  _formatCount(widget.version.download_count),
+                  style: Theme.of(context).textTheme.labelSmall,
                 ),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    ref
-                        .read(selectedModelVersionProvider.notifier)
-                        .setVersion(widget.version);
-                    Navigator.pop(context);
-                  },
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('Run'),
+                const SizedBox(width: 16),
+                const Icon(Icons.star_outline, size: 14),
+                const SizedBox(width: 4),
+                Text(
+                  widget.version.num_ratings > 0
+                      ? '${widget.version.rating_avg.toStringAsFixed(1)} (${_formatCount(widget.version.num_ratings)})'
+                      : 'No ratings',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+                const SizedBox(width: 16),
+                Text(
+                  '${(widget.version.file_size_bytes / 1024 / 1024).toStringAsFixed(1)} MB',
+                  style: Theme.of(context).textTheme.labelSmall,
                 ),
               ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.version.license_type,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: isDownloaded
+                  ? ElevatedButton.icon(
+                      onPressed: () {
+                        ref
+                            .read(selectedModelVersionProvider.notifier)
+                            .setVersion(widget.version);
+                        Navigator.pop(context);
+                      },
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('Run'),
+                    )
+                  : ElevatedButton.icon(
+                      onPressed: _handleDownload,
+                      icon: const Icon(Icons.download),
+                      label: const Text('Download'),
+                    ),
             ),
           ],
         ),
@@ -479,15 +761,34 @@ class _VersionTileState extends ConsumerState<_VersionTile> {
     final messenger = ScaffoldMessenger.of(context);
     final api = ref.read(apiServiceProvider);
     final notifier = ref.read(downloadedModelsProvider.notifier);
+    final inProgressNotifier = ref.read(inProgressDownloadsProvider.notifier);
 
-    // Close the parent dialog immediately so the user isn't blocked.
+    // Compute the asset list here so we know totalSteps before closing.
+    final assetKeys = <String>[
+      'tflite',
+      if (version.assets.labels != null) 'labels',
+      if (version.assets.anchors != null) 'anchors',
+      if (version.assets.tokenizer != null) 'tokenizer',
+      if (version.assets.vocab != null) 'vocab',
+    ];
+    final totalSteps = assetKeys.length + (version.pipeline_spec != null ? 1 : 0);
+
+    // Register with in-progress provider so the My AI tab shows the card immediately.
+    inProgressNotifier.startDownload(InProgressDownload(
+      versionId: version.id,
+      modelName: modelName,
+      versionName: version.version_name,
+      completedSteps: 0,
+      totalSteps: totalSteps,
+    ));
+
+    // Close the parent dialog and navigate directly to the My AI tab.
     Navigator.pop(context);
-
-    // Show a persistent in-progress snackbar.
+    ref.read(selectedIndexProvider.notifier).state = 1;
     messenger.showSnackBar(
       SnackBar(
         content: Text('Downloading $modelName\u2026'),
-        duration: const Duration(minutes: 10),
+        duration: const Duration(seconds: 2),
       ),
     );
 
@@ -505,21 +806,16 @@ class _VersionTileState extends ConsumerState<_VersionTile> {
         debugPrint('[Download] Created directory: ${versionDir.path}');
       }
 
-      final assetKeys = <String>[
-        'tflite',
-        if (version.assets.labels != null) 'labels',
-        if (version.assets.anchors != null) 'anchors',
-        if (version.assets.tokenizer != null) 'tokenizer',
-        if (version.assets.vocab != null) 'vocab',
-      ];
       debugPrint('[Download] Assets to fetch: $assetKeys');
 
+      int completedSteps = 0;
       for (final assetKey in assetKeys) {
         debugPrint('[Download] Fetching asset: $assetKey');
         final bytes = await api.downloadAsset(version.id, assetKey);
         debugPrint('[Download] Received $assetKey: ${bytes.length} bytes');
         await File('${versionDir.path}/$assetKey').writeAsBytes(bytes);
         debugPrint('[Download] Wrote $assetKey to disk');
+        inProgressNotifier.updateProgress(version.id, ++completedSteps);
       }
 
       if (version.pipeline_spec != null) {
@@ -527,9 +823,11 @@ class _VersionTileState extends ConsumerState<_VersionTile> {
         await File(
           '${versionDir.path}/pipeline_spec.json',
         ).writeAsString(jsonEncode(version.pipeline_spec!.toJson()));
+        inProgressNotifier.updateProgress(version.id, ++completedSteps);
       }
 
       debugPrint('[Download] Complete: $modelName → ${versionDir.path}');
+      inProgressNotifier.finishDownload(version.id);
       notifier.addDownloadedModel(
         DownloadedModel(
           modelId: version.model_id,
@@ -542,17 +840,16 @@ class _VersionTileState extends ConsumerState<_VersionTile> {
         ),
       );
 
-      messenger.hideCurrentSnackBar();
       messenger.showSnackBar(
         SnackBar(
-          content: Text('$modelName downloaded! Check the "My AI" tab.'),
-          duration: const Duration(seconds: 4),
+          content: Text('$modelName downloaded!'),
+          duration: const Duration(seconds: 3),
         ),
       );
     } catch (e, stack) {
       debugPrint('[Download] Error: $e');
       debugPrint('[Download] Stack: $stack');
-      messenger.hideCurrentSnackBar();
+      inProgressNotifier.finishDownload(version.id);
       messenger.showSnackBar(
         SnackBar(
           content: Text('Download failed: $e'),
@@ -573,7 +870,21 @@ class ModelRange extends ConsumerWidget {
 
     // check if no model has been selected
     if (selectedModel == null) {
-      return const Center(child: Text('Select a model to view details!'));
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Select a model to take out to the range'),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: () {
+                ref.read(selectedIndexProvider.notifier).state = 0;
+              },
+              child: const Text('Browse Models'),
+            ),
+          ],
+        ),
+      );
     }
 
     // Fetch versions for the selected model
@@ -664,16 +975,41 @@ class VersionCard extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Version: ${version.version_name}',
+              version.version_name,
               style: Theme.of(context).textTheme.titleSmall,
             ),
             const SizedBox(height: 8),
-            Text('Status: ${version.status}'),
-            Text('License: ${version.license_type}'),
-            Text(
-              'File Size: ${(version.file_size_bytes / 1024 / 1024).toStringAsFixed(2)} MB',
+            Row(
+              children: [
+                const Icon(Icons.download_outlined, size: 14),
+                const SizedBox(width: 4),
+                Text(
+                  _formatCount(version.download_count),
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+                const SizedBox(width: 16),
+                const Icon(Icons.star_outline, size: 14),
+                const SizedBox(width: 4),
+                Text(
+                  version.num_ratings > 0
+                      ? '${version.rating_avg.toStringAsFixed(1)} (${_formatCount(version.num_ratings)})'
+                      : 'No ratings',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+                const SizedBox(width: 16),
+                Text(
+                  '${(version.file_size_bytes / 1024 / 1024).toStringAsFixed(1)} MB',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ],
             ),
-            Text('Downloads: ${version.download_count}'),
+            const SizedBox(height: 4),
+            Text(
+              version.license_type,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
             const SizedBox(height: 12),
             if (version.pipeline_spec != null)
               Column(
@@ -995,8 +1331,9 @@ class DownloadedModels extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final downloadedModels = ref.watch(downloadedModelsProvider);
+    final inProgress = ref.watch(inProgressDownloadsProvider);
 
-    if (downloadedModels.isEmpty) {
+    if (downloadedModels.isEmpty && inProgress.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1022,6 +1359,8 @@ class DownloadedModels extends ConsumerWidget {
       );
     }
 
+    final totalCount = downloadedModels.length + inProgress.length;
+
     return SingleChildScrollView(
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -1029,10 +1368,43 @@ class DownloadedModels extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Downloaded Models (${downloadedModels.length})',
+              'My AI ($totalCount)',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 16),
+            // In-progress download cards
+            for (final download in inProgress.values)
+              Card(
+                margin: const EdgeInsets.symmetric(vertical: 8.0),
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        download.modelName,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text('Version: ${download.versionName}'),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Icon(Icons.download_outlined, size: 16),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Downloading\u2026 ${(download.progress * 100).toInt()}%',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      LinearProgressIndicator(value: download.progress),
+                    ],
+                  ),
+                ),
+              ),
+            // Completed download cards
             ListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -1109,6 +1481,14 @@ class DownloadedModels extends ConsumerWidget {
       case 'object_detection':
       case 'object-detection':
         inferenceWidget = ObjectDetectionWidget(
+          modelName: tflitePath,
+          pipelinePath: pipelinePath,
+          isLocalFile: true,
+          localDir: model.localPath,
+        );
+      case 'text_generation':
+      case 'text-generation':
+        inferenceWidget = TextGenerationWidget(
           modelName: tflitePath,
           pipelinePath: pipelinePath,
           isLocalFile: true,
