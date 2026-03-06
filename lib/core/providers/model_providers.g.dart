@@ -349,7 +349,7 @@ class _ModelVersionsProviderElement
   String get modelId => (origin as ModelVersionsProvider).modelId;
 }
 
-String _$supportedVersionsHash() => r'72504b7e627f8958b7af0cdfd52cf03dd99eed5d';
+String _$supportedVersionsHash() => r'27c0d0b3aca10870c5519cd93a8f4ec893aa0a4c';
 
 /// Get only supported versions for a model
 ///

@@ -176,7 +176,6 @@ ModelVersion _$ModelVersionFromJson(Map<String, dynamic> json) => ModelVersion(
   download_count: (json['download_count'] as num).toInt(),
   num_ratings: (json['num_ratings'] as num).toInt(),
   rating_avg: (json['rating_avg'] as num).toDouble(),
-  is_supported: json['is_supported'] as bool,
   unsupported_reason: json['unsupported_reason'] as String?,
 );
 
@@ -199,7 +198,6 @@ Map<String, dynamic> _$ModelVersionToJson(ModelVersion instance) =>
       'download_count': instance.download_count,
       'num_ratings': instance.num_ratings,
       'rating_avg': instance.rating_avg,
-      'is_supported': instance.is_supported,
       'unsupported_reason': instance.unsupported_reason,
     };
 

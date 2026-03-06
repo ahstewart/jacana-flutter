@@ -24,6 +24,7 @@ import 'package:flutter_gemma/flutter_gemma.dart';
 class InferenceService {
   // initialize interpreter, pipeline (metadata), etc
   Interpreter? _interpreter;
+  IsolateInterpreter? _isolateInterpreter;
   InferenceModel? _mediaPipeLlm;
   Pipeline? modelPipeline;
 
@@ -126,6 +127,10 @@ class InferenceService {
         _interpreter = isLocalFile
             ? Interpreter.fromFile(File(modelPath), options: options)
             : await Interpreter.fromAsset(modelPath, options: options);
+
+        _isolateInterpreter = await IsolateInterpreter.create(
+          address: _interpreter!.address,
+        );
 
         if (kDebugMode) {
           debugPrint(_interpreter?.getInputTensors().toString());
@@ -1013,7 +1018,7 @@ class InferenceService {
       if (kDebugMode) {
         debugPrint("Running inference on model.");
       }
-      _interpreter?.runForMultipleInputs(processedInputs, outputBuffers);
+      await _isolateInterpreter!.runForMultipleInputs(processedInputs, outputBuffers);
       debugPrint("Inference completed.");
       if (kDebugMode) {
         developer.log("Inspecting outputBuffers variable from the TFLite inference.");
@@ -1149,6 +1154,8 @@ class InferenceService {
   void dispose() {
     unawaited(_mediaPipeLlm?.close());
     _mediaPipeLlm = null;
+    _isolateInterpreter?.close();
+    _isolateInterpreter = null;
     _interpreter?.close();
     _interpreter = null;
     modelPipeline = null;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -6,13 +7,13 @@ import 'package:image_picker/image_picker.dart';
 /// Handles:
 ///   - Model init state (loading spinner / error) via [initFuture]
 ///   - Gallery and Camera picker buttons
-///   - Full-screen "Running model…" overlay while [isRunning]
+///   - Full-screen "Running model…" overlay with elapsed timer while [isRunning]
 ///
 /// The caller supplies:
 ///   - [imageArea]  — the image display widget (with any task-specific overlay)
 ///   - [results]    — task-specific result content shown below the buttons
 ///   - [onImagePicked] — called with the chosen [ImageSource]
-class ImageInferenceShell extends StatelessWidget {
+class ImageInferenceShell extends StatefulWidget {
   final String title;
   final Future<void> initFuture;
   final bool isRunning;
@@ -31,9 +32,50 @@ class ImageInferenceShell extends StatelessWidget {
   });
 
   @override
+  State<ImageInferenceShell> createState() => _ImageInferenceShellState();
+}
+
+class _ImageInferenceShellState extends State<ImageInferenceShell> {
+  final Stopwatch _stopwatch = Stopwatch();
+  Timer? _ticker;
+
+  @override
+  void didUpdateWidget(ImageInferenceShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isRunning && !oldWidget.isRunning) {
+      _stopwatch.reset();
+      _stopwatch.start();
+      _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+        setState(() {});
+      });
+    } else if (!widget.isRunning && oldWidget.isRunning) {
+      _stopwatch.stop();
+      _ticker?.cancel();
+      _ticker = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    _stopwatch.stop();
+    super.dispose();
+  }
+
+  String get _elapsedLabel {
+    final ms = _stopwatch.elapsedMilliseconds;
+    if (ms < 60000) {
+      return '${(ms / 1000).toStringAsFixed(1)}s';
+    }
+    final m = ms ~/ 60000;
+    final s = (ms % 60000) ~/ 1000;
+    return '${m}m ${s}s';
+  }
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<void>(
-      future: initFuture,
+      future: widget.initFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const Scaffold(
@@ -51,7 +93,7 @@ class ImageInferenceShell extends StatelessWidget {
           );
         }
         return Scaffold(
-          appBar: AppBar(title: Text(title)),
+          appBar: AppBar(title: Text(widget.title)),
           body: Stack(
             children: [
               SafeArea(
@@ -61,7 +103,7 @@ class ImageInferenceShell extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        imageArea,
+                        widget.imageArea,
                         const SizedBox(height: 20),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -69,22 +111,22 @@ class ImageInferenceShell extends StatelessWidget {
                             ElevatedButton.icon(
                               icon: const Icon(Icons.image_outlined),
                               label: const Text('Gallery'),
-                              onPressed: isRunning
+                              onPressed: widget.isRunning
                                   ? null
-                                  : () => onImagePicked(ImageSource.gallery),
+                                  : () => widget.onImagePicked(ImageSource.gallery),
                             ),
                             ElevatedButton.icon(
                               icon: const Icon(Icons.camera_alt_outlined),
                               label: const Text('Camera'),
-                              onPressed: isRunning
+                              onPressed: widget.isRunning
                                   ? null
-                                  : () => onImagePicked(ImageSource.camera),
+                                  : () => widget.onImagePicked(ImageSource.camera),
                             ),
                           ],
                         ),
-                        if (results != null) ...[
+                        if (widget.results != null) ...[
                           const SizedBox(height: 20),
-                          results!,
+                          widget.results!,
                         ],
                         const SizedBox(height: 20),
                       ],
@@ -92,19 +134,28 @@ class ImageInferenceShell extends StatelessWidget {
                   ),
                 ),
               ),
-              if (isRunning)
-                const Positioned.fill(
+              if (widget.isRunning)
+                Positioned.fill(
                   child: ColoredBox(
-                    color: Color(0xAA000000),
+                    color: const Color(0xAA000000),
                     child: Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          CircularProgressIndicator(color: Colors.white),
-                          SizedBox(height: 16),
-                          Text(
+                          const CircularProgressIndicator(color: Colors.white),
+                          const SizedBox(height: 16),
+                          const Text(
                             'Running model\u2026',
                             style: TextStyle(color: Colors.white, fontSize: 16),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _elapsedLabel,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 14,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
                           ),
                         ],
                       ),

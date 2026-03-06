@@ -182,7 +182,6 @@ class ModelVersion {
   final int download_count;
   final int num_ratings;
   final double rating_avg;
-  final bool is_supported;
   final String? unsupported_reason;
 
   ModelVersion({
@@ -203,9 +202,11 @@ class ModelVersion {
     required this.download_count,
     required this.num_ratings,
     required this.rating_avg,
-    required this.is_supported,
     this.unsupported_reason,
   });
+
+  /// True if this version has a runnable pipeline (validated or unverified).
+  bool get isUsable => status == 'supported' || status == 'unverified';
 
   factory ModelVersion.fromJson(Map<String, dynamic> json) =>
       _$ModelVersionFromJson(json);
@@ -256,5 +257,5 @@ class MLModel {
 
   /// Check if this model has at least one supported version
   bool get hasSupported =>
-      versions != null && versions!.any((v) => v.is_supported);
+      versions != null && versions!.any((v) => v.isUsable);
 }

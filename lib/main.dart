@@ -602,7 +602,7 @@ class _ModelDetailsModalState extends ConsumerState<ModelDetailsModal> {
       child: versionsAsync.when(
         data: (versions) {
           final supportedVersions =
-              versions.where((v) => v.is_supported).toList();
+              versions.where((v) => v.isUsable).toList();
 
           if (supportedVersions.isEmpty) {
             return AlertDialog(
@@ -1024,7 +1024,7 @@ class ModelRange extends ConsumerWidget {
       data: (versions) {
         // Filter to only supported versions
         final supportedVersions =
-            versions.where((v) => v.is_supported).toList();
+            versions.where((v) => v.isUsable).toList();
 
         if (supportedVersions.isEmpty) {
           return const Center(

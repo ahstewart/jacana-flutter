@@ -61,7 +61,7 @@ Future<List<ModelVersion>> supportedVersions(
   String modelId,
 ) async {
   final versions = await ref.watch(modelVersionsProvider(modelId).future);
-  return versions.where((v) => v.is_supported).toList();
+  return versions.where((v) => v.isUsable).toList();
 }
 
 /// Fetch a specific model version
