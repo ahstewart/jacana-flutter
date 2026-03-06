@@ -37,16 +37,21 @@ class TextResult extends InferenceResult {
   String get results => text;
 }
 
-class SegmentationMaskResult extends InferenceResult {
-  // Could be List<List<int>>, Uint8List, img.Image, etc.
-  final dynamic maskData;
-  final int height;
-  final int width;
-  SegmentationMaskResult(this.maskData, this.height, this.width);
+class SegmentationResult extends InferenceResult {
+  final img.Image mask;           // colorized segmentation mask at model resolution
+  final int numClasses;
+  final List<List<int>> palette;  // RGB palette used to colorize (needed for legend)
+  final List<String>? labels;     // optional class names, one per class index
 
-  // satisfy base getter even if not used for text
+  SegmentationResult({
+    required this.mask,
+    required this.numClasses,
+    required this.palette,
+    this.labels,
+  });
+
   @override
-  String get results => maskData;
+  img.Image get results => mask;
 }
 
 class ErrorResult extends InferenceResult {

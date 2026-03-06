@@ -224,6 +224,7 @@ class MLModel {
   final String? slug;
   final String description;
   final String category;
+  final String? task;
   final List<String> tags;
   final int total_download_count;
   final int total_ratings;
@@ -239,6 +240,7 @@ class MLModel {
     this.slug,
     required this.description,
     required this.category,
+    this.task,
     required this.tags,
     required this.total_download_count,
     required this.total_ratings,

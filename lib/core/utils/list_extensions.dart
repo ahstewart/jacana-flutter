@@ -95,3 +95,7 @@ extension ReshapeList on List {
 extension ReshapeFloat32List on Float32List {
   List reshape(List<int> newShape) => toList().reshape(newShape);
 }
+
+extension ReshapeUint8List on Uint8List {
+  List reshape(List<int> newShape) => toList().reshape(newShape);
+}

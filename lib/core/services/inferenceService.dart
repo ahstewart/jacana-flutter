@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -17,11 +18,13 @@ import '../utils/list_extensions.dart';
 import '../utils/data_types.dart';
 import '../utils/math.dart';
 import 'tokenizer_service.dart';
+import 'package:flutter_gemma/flutter_gemma.dart';
 
 // inference class that contains methods for loading models, pre and post processing, and running the actual inference
 class InferenceService {
   // initialize interpreter, pipeline (metadata), etc
   Interpreter? _interpreter;
+  InferenceModel? _mediaPipeLlm;
   Pipeline? modelPipeline;
 
   List<String>? _labels;
@@ -29,7 +32,10 @@ class InferenceService {
   // Stores the preprocessed inputs from the last performInference call.
   // Used by the autoregressive 'generate' postprocessing step.
   Map<String, dynamic> _lastPreprocessedInputs = {};
-  bool get isReady => _interpreter != null && modelPipeline != null;
+  bool get isReady => (_interpreter != null || _mediaPipeLlm != null) && modelPipeline != null;
+
+  bool get _isMediaPipeLlm =>
+      modelPipeline?.metadata.firstOrNull?.framework == 'mediapipe_litert';
 
   dynamic scoreTensor;
 
@@ -51,12 +57,60 @@ class InferenceService {
 
   // Call this to initialize
   Future<void> initialize() async {
-    await loadPipeline(
-      pipelinePath,
-    ); // Load pipeline first to get model info if needed
+    await loadPipeline(pipelinePath); // Load pipeline first to get model info if needed
+    if (_isMediaPipeLlm) {
+      await _initializeMediaPipeLlm();
+      return;
+    }
     await loadModel(modelPath); // Load model
     await loadLabelsIfNeeded(); // Load labels if needed by any postprocessing step
     await loadTokenizerIfNeeded(); // Load tokenizer if any preprocessing block uses text input
+  }
+
+  Future<void> _initializeMediaPipeLlm() async {
+    // Read generation params from the mediapipe_generate postprocessing step.
+    int maxTokens = 512;
+    double temperature = 0.8;
+    int topK = 40;
+    int? randomSeed;
+    for (final block in modelPipeline!.postprocessing) {
+      for (final step in block.steps) {
+        if (step.step == 'mediapipe_generate') {
+          maxTokens = (step.params['max_tokens'] as num?)?.toInt() ?? maxTokens;
+          temperature = (step.params['temperature'] as num?)?.toDouble() ?? temperature;
+          topK = (step.params['top_k'] as num?)?.toInt() ?? topK;
+          randomSeed = (step.params['random_seed'] as num?)?.toInt();
+          break;
+        }
+      }
+    }
+    // Resolve ModelType from the pipeline config's model_type string.
+    String modelTypeStr = 'gemmaIt';
+    for (final block in modelPipeline!.postprocessing) {
+      for (final step in block.steps) {
+        if (step.step == 'mediapipe_generate') {
+          modelTypeStr = (step.params['model_type'] as String?) ?? modelTypeStr;
+          break;
+        }
+      }
+    }
+    final modelTypeMap = {
+      'gemmaIt':   ModelType.gemmaIt,
+      'general':   ModelType.general,
+      'deepSeek':  ModelType.deepSeek,
+      'qwen':      ModelType.qwen,
+      'llama':     ModelType.llama,
+      'hammer':    ModelType.hammer,
+    };
+    final resolvedModelType = modelTypeMap[modelTypeStr] ?? ModelType.gemmaIt;
+
+    await FlutterGemma.initialize();
+    await FlutterGemma.installModel(
+      modelType: resolvedModelType,
+      fileType: ModelFileType.task,
+    ).fromFile(modelPath).install();
+    _mediaPipeLlm = await FlutterGemma.getActiveModel(maxTokens: maxTokens);
+    debugPrint('[InferenceService] MediaPipe LLM initialized: $modelPath');
   }
 
   // load model from model_path (AKA create an interpreter)
@@ -510,6 +564,88 @@ class InferenceService {
         return ErrorResult(
           "Postprocessing for '$outputName' (text) did not produce a String. Got ${currentResult.runtimeType}",
         );
+      case 'segmentation_mask':
+        if (currentResult is img.Image) {
+          int numClasses = 1;
+          List<List<int>> palette = [];
+          String? colorMap;
+          for (final s in block.steps) {
+            if (s.step == 'decode_segmentation_mask') {
+              numClasses = (s.params['num_classes'] as num).toInt();
+              colorMap = s.params['color_map'] as String?;
+              palette = _buildSegmentationPalette(numClasses, colorMap);
+              break;
+            }
+          }
+          return SegmentationResult(
+            mask: currentResult,
+            numClasses: numClasses,
+            palette: palette,
+            labels: _labels?.isNotEmpty == true ? _labels : null,
+          );
+        }
+        return ErrorResult(
+          "Postprocessing for '$outputName' (segmentation) did not produce an img.Image. Got ${currentResult.runtimeType}",
+        );
+      case 'image_segmentation_masks':
+        // Single-channel class-index mask: raw tensor shape [1, H, W, 1] uint8.
+        // map_labels may have mangled currentResult, so read from rawOutputs directly.
+        final rawMask = block.source_tensors.isNotEmpty
+            ? rawOutputs[block.source_tensors[0]]
+            : null;
+        if (rawMask == null) {
+          return ErrorResult(
+            "image_segmentation_masks: source tensor '${block.source_tensors.firstOrNull}' not found.",
+          );
+        }
+        int numClasses = 0;
+        String? colorMap;
+        for (final s in block.steps) {
+          if (numClasses == 0 && s.params.containsKey('num_classes')) {
+            numClasses = (s.params['num_classes'] as num).toInt();
+          }
+          if (colorMap == null && s.params.containsKey('color_map')) {
+            colorMap = s.params['color_map'] as String?;
+          }
+        }
+        try {
+          final List batch0 = (rawMask as List)[0] as List;
+          final int H = batch0.length;
+          final int W = (batch0[0] as List).length;
+          if (numClasses == 0) {
+            for (int h = 0; h < H; h++) {
+              for (int w = 0; w < W; w++) {
+                final cell = (batch0[h] as List)[w];
+                final idx = cell is List
+                    ? (cell[0] as num).toInt()
+                    : (cell as num).toInt();
+                if (idx + 1 > numClasses) numClasses = idx + 1;
+              }
+            }
+            numClasses = numClasses.clamp(1, 256);
+          }
+          final palette = _buildSegmentationPalette(numClasses, colorMap);
+          final maskImg = img.Image(width: W, height: H);
+          for (int h = 0; h < H; h++) {
+            for (int w = 0; w < W; w++) {
+              final cell = (batch0[h] as List)[w];
+              final classIdx = (cell is List
+                      ? (cell[0] as num).toInt()
+                      : (cell as num).toInt())
+                  .clamp(0, palette.length - 1);
+              final rgb = palette[classIdx];
+              maskImg.setPixel(w, h, img.ColorRgb8(rgb[0], rgb[1], rgb[2]));
+            }
+          }
+          return SegmentationResult(
+            mask: maskImg,
+            numClasses: numClasses,
+            palette: palette,
+            labels: _labels?.isNotEmpty == true ? _labels : null,
+          );
+        } catch (e) {
+          return ErrorResult("image_segmentation_masks colorization failed: $e");
+        }
       default:
         if (kDebugMode)
           debugPrint(
@@ -533,11 +669,27 @@ class InferenceService {
       // resizing an image, input is img.Image
       case 'resize_image':
         try {
-          // resize image to sizes defined in the model metadata schema (MMS)
+          int targetWidth = (step.params['width'] as num?)?.toInt() ?? 224;
+          int targetHeight = (step.params['height'] as num?)?.toInt() ?? 224;
+          // Use actual interpreter input tensor shape when available — overrides
+          // the pipeline-declared size, which the LLM may have got wrong.
+          final actualShape = _getActualInputShape(preprocessingBlockIndex, []);
+          if (actualShape.length == 4 && actualShape[1] > 0 && actualShape[2] > 0) {
+            if (kDebugMode &&
+                (actualShape[1] != targetHeight || actualShape[2] != targetWidth)) {
+              debugPrint(
+                '[InferenceService] resize_image: pipeline size '
+                '${targetWidth}x${targetHeight} overridden by actual model '
+                'input shape ${actualShape[2]}x${actualShape[1]}.',
+              );
+            }
+            targetHeight = actualShape[1];
+            targetWidth = actualShape[2];
+          }
           img.Image resizedImage = img.copyResize(
             inputData,
-            width: step.params['width'],
-            height: step.params['height'],
+            width: targetWidth,
+            height: targetHeight,
           );
           return resizedImage;
         } catch (e) {
@@ -553,6 +705,23 @@ class InferenceService {
         debugPrint("Normalizing image...");
         String? method = step.params['method'];
         String normalizeColorSpace = step.params['color_space'] ?? "RGB";
+
+        // Quantized (uint8) models embed normalization in the model weights.
+        // Passing float-normalized values would corrupt inference — skip to
+        // raw byte conversion only.
+        final actualInputDtype = _getActualInputDtype(preprocessingBlockIndex);
+        if (actualInputDtype == 'uint8' || actualInputDtype == 'int8') {
+          if (kDebugMode) {
+            debugPrint(
+              '[InferenceService] normalize: skipping float normalization '
+              'because actual model input dtype is $actualInputDtype.',
+            );
+          }
+          if (inputData is img.Image) {
+            return Uint8List.fromList(imgToBytes(inputData, normalizeColorSpace));
+          }
+          return inputData;
+        }
 
         try {
           debugPrint("Checking input type. Normalization requires U8intList.");
@@ -636,6 +805,18 @@ class InferenceService {
         String inputColorSpace = step.params['color_space'];
         String dataLayout = step.params['data_layout'].toLowerCase();
 
+        // Override pipeline-declared dtype with the actual interpreter input dtype.
+        final actualFormatDtype = _getActualInputDtype(preprocessingBlockIndex);
+        if (actualFormatDtype.isNotEmpty && actualFormatDtype != targetDtype) {
+          if (kDebugMode) {
+            debugPrint(
+              '[InferenceService] format: pipeline dtype $targetDtype '
+              'overridden by actual model input dtype $actualFormatDtype.',
+            );
+          }
+          targetDtype = actualFormatDtype;
+        }
+
         // first format data type and color space. supports 2 types of conversions: float32 and uint8
         // color space formatting is done with the imgToBytes helper method
         if (targetDtype == 'float32' && inputData is! Float32List) {
@@ -688,12 +869,18 @@ class InferenceService {
 
         // lastly, check that the shape is identical to the shape parameter of the input object
         List<int> targetInputShape = [];
-        String preprocessingBlockInputName =
-            modelPipeline!.preprocessing[preprocessingBlockIndex].input_name;
-        for (var inputs in modelPipeline!.inputs) {
-          if (inputs.name == preprocessingBlockInputName) {
-            targetInputShape = inputs.shape;
-            break;
+        // Prefer actual interpreter input tensor shape (catches LLM-generated mismatches).
+        final actualInputShape = _getActualInputShape(preprocessingBlockIndex, []);
+        if (actualInputShape.isNotEmpty) {
+          targetInputShape = actualInputShape;
+        } else {
+          String preprocessingBlockInputName =
+              modelPipeline!.preprocessing[preprocessingBlockIndex].input_name;
+          for (var inputs in modelPipeline!.inputs) {
+            if (inputs.name == preprocessingBlockInputName) {
+              targetInputShape = inputs.shape;
+              break;
+            }
           }
         }
 
@@ -711,8 +898,9 @@ class InferenceService {
             switch (targetDtype.toLowerCase()) {
               case 'float32':
                 return (finalData as Float32List).reshape(targetInputShape);
-              //case 'uint8':
-              //  return (finalData as Uint8List).reshape(targetInputShape);
+              case 'uint8':
+              case 'int8':
+                return (finalData as Uint8List).reshape(targetInputShape);
             }
           } catch (e) {
             if (kDebugMode) {
@@ -779,6 +967,9 @@ class InferenceService {
   Future<Map<String, InferenceResult>> performInference(
     Map<String, dynamic> inferenceInputs,
   ) async {
+    if (_isMediaPipeLlm) {
+      return _runMediaPipeLlmInference(inferenceInputs);
+    }
     // check that the inputs provided match the inputs expected based on the pipeline file
     if (inferenceInputs.length != modelPipeline!.inputs.length) {
       throw ArgumentError(
@@ -875,8 +1066,89 @@ class InferenceService {
     return finalResults;
   }
 
+  Future<Map<String, InferenceResult>> _runMediaPipeLlmInference(
+      Map<String, dynamic> inputs) async {
+    final prompt = inputs.values.first.toString();
+
+    // Read per-session generation params from the pipeline config.
+    double temperature = 0.8;
+    int topK = 40;
+    int randomSeed = 0;
+    for (final block in modelPipeline!.postprocessing) {
+      for (final step in block.steps) {
+        if (step.step == 'mediapipe_generate') {
+          temperature = (step.params['temperature'] as num?)?.toDouble() ?? temperature;
+          topK = (step.params['top_k'] as num?)?.toInt() ?? topK;
+          randomSeed = (step.params['random_seed'] as num?)?.toInt() ?? randomSeed;
+          break;
+        }
+      }
+    }
+
+    final session = await _mediaPipeLlm!.createSession(
+      temperature: temperature,
+      topK: topK,
+      randomSeed: randomSeed,
+    );
+    await session.addQueryChunk(Message.text(text: prompt, isUser: true));
+    final response = await session.getResponse();
+    await session.close();
+    return {'generated_text': TextResult(response)};
+  }
+
+  /// Returns an N×3 RGB palette for segmentation mask colorization.
+  /// Supports "pascal_voc" (21 classes), "cityscapes" (19 classes),
+  /// and auto-generated HSV hues for everything else.
+  List<List<int>> _buildSegmentationPalette(int numClasses, String? colorMap) {
+    if (colorMap == 'pascal_voc') {
+      return [
+        [0,0,0],[128,0,0],[0,128,0],[128,128,0],
+        [0,0,128],[128,0,128],[0,128,128],[128,128,128],
+        [64,0,0],[192,0,0],[64,128,0],[192,128,0],
+        [64,0,128],[192,0,128],[64,128,128],[192,128,128],
+        [0,64,0],[128,64,0],[0,192,0],[128,192,0],
+        [0,64,128],
+      ];
+    }
+    if (colorMap == 'cityscapes') {
+      return [
+        [128,64,128],[244,35,232],[70,70,70],[102,102,156],
+        [190,153,153],[153,153,153],[250,170,30],[220,220,0],
+        [107,142,35],[152,251,152],[70,130,180],[220,20,60],
+        [255,0,0],[0,0,142],[0,0,70],[0,60,100],
+        [0,80,100],[0,0,230],[119,11,32],
+      ];
+    }
+    // Auto-generate evenly-spaced HSV hues.
+    final List<List<int>> palette = [];
+    for (int i = 0; i < numClasses; i++) {
+      final double hue = (i / numClasses) * 360.0;
+      final color = img.ColorRgb8(0, 0, 0);
+      // HSV→RGB: S=1, V=1
+      final double s = 1.0, v = 1.0;
+      final double c = v * s;
+      final double x = c * (1 - ((hue / 60) % 2 - 1).abs());
+      final double m = v - c;
+      double r1, g1, b1;
+      if (hue < 60)       { r1=c; g1=x; b1=0; }
+      else if (hue < 120) { r1=x; g1=c; b1=0; }
+      else if (hue < 180) { r1=0; g1=c; b1=x; }
+      else if (hue < 240) { r1=0; g1=x; b1=c; }
+      else if (hue < 300) { r1=x; g1=0; b1=c; }
+      else                { r1=c; g1=0; b1=x; }
+      palette.add([
+        ((r1 + m) * 255).round(),
+        ((g1 + m) * 255).round(),
+        ((b1 + m) * 255).round(),
+      ]);
+    }
+    return palette;
+  }
+
   // method to dispose of the inference objects from memory
   void dispose() {
+    unawaited(_mediaPipeLlm?.close());
+    _mediaPipeLlm = null;
     _interpreter?.close();
     _interpreter = null;
     modelPipeline = null;
@@ -1304,6 +1576,40 @@ class InferenceService {
           debugPrint("[InferenceService] Decoded ${ids.length} token IDs to text.");
         }
 
+      case 'decode_segmentation_mask':
+        final int numClasses = (step.params['num_classes'] as num).toInt();
+        final String? colorMap = step.params['color_map'] as String?;
+        final palette = _buildSegmentationPalette(numClasses, colorMap);
+        // Supports two output layouts:
+        //   [1, H, W, C] — per-class scores (float), argmax required
+        //   [1, H, W]    — class indices already argmaxed (int/uint8)
+        final tensor = processedOutput as List;
+        final batch0 = tensor[0] as List;
+        final int H = batch0.length;
+        final int W = (batch0[0] as List).length;
+        final maskImg = img.Image(width: W, height: H);
+        for (int h = 0; h < H; h++) {
+          for (int w = 0; w < W; w++) {
+            final cell = (batch0[h] as List)[w];
+            int bestClass;
+            if (cell is List) {
+              // [1, H, W, C]: argmax over channel dim
+              bestClass = 0;
+              double bestScore = double.negativeInfinity;
+              for (int c = 0; c < cell.length; c++) {
+                final s = (cell[c] as num).toDouble();
+                if (s > bestScore) { bestScore = s; bestClass = c; }
+              }
+            } else {
+              // [1, H, W]: value is already the class index
+              bestClass = (cell as num).toInt();
+            }
+            final rgb = palette[bestClass.clamp(0, palette.length - 1)];
+            maskImg.setPixel(w, h, img.ColorRgb8(rgb[0], rgb[1], rgb[2]));
+          }
+        }
+        processedOutput = maskImg;
+
       default:
         if (kDebugMode) {
           debugPrint("Warning: Unsupported postprocessing step: ${step.step}");
@@ -1325,6 +1631,36 @@ class InferenceService {
       } catch (_) {}
     }
     return fallbackShape;
+  }
+
+  /// Returns the actual TFLite input tensor shape for [index].
+  /// Only returns the shape when all dimensions are positive (i.e. fixed shape).
+  /// Falls back to [fallbackShape] for dynamic-shape models.
+  List<int> _getActualInputShape(int index, List<int> fallbackShape) {
+    if (_interpreter != null) {
+      try {
+        final tensors = _interpreter!.getInputTensors();
+        if (index < tensors.length) {
+          final shape = List<int>.from(tensors[index].shape);
+          if (shape.every((d) => d > 0)) return shape;
+        }
+      } catch (_) {}
+    }
+    return fallbackShape;
+  }
+
+  /// Returns the actual TFLite input tensor dtype string for [index],
+  /// or an empty string if unavailable.
+  String _getActualInputDtype(int index) {
+    if (_interpreter != null) {
+      try {
+        final tensors = _interpreter!.getInputTensors();
+        if (index < tensors.length) {
+          return _tensorTypeToDtype(tensors[index].type);
+        }
+      } catch (_) {}
+    }
+    return '';
   }
 
   /// Returns the actual input sequence length from the TFLite interpreter.
