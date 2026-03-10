@@ -16,6 +16,7 @@ import 'dart:convert';
 import 'features/object_detection/object_detection.dart';
 import 'features/text_generation/text_generation.dart';
 import 'features/semantic_segmentation/semantic_segmentation.dart';
+import 'features/automatic_speech_recognition/asr_widget.dart';
 import 'package:path_provider/path_provider.dart';
 
 // Returns free bytes available on the filesystem containing [dirPath], or null on failure.
@@ -1851,6 +1852,14 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
       case 'semantic-segmentation':
       case 'segmentation':
         inferenceWidget = SemanticSegmentationWidget(
+          modelName: tflitePath,
+          pipelinePath: pipelinePath,
+          isLocalFile: true,
+          localDir: model.localPath,
+        );
+      case 'automatic_speech_recognition':
+      case 'automatic-speech-recognition':
+        inferenceWidget = AutomaticSpeechRecognitionWidget(
           modelName: tflitePath,
           pipelinePath: pipelinePath,
           isLocalFile: true,

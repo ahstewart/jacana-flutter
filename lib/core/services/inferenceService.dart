@@ -20,6 +20,109 @@ import '../utils/math.dart';
 import 'tokenizer_service.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
 
+// ---------------------------------------------------------------------------
+// Top-level helpers required by compute() — must live outside InferenceService
+// ---------------------------------------------------------------------------
+
+/// Parameters for [_tfliteInferenceCompute].
+class _TfliteComputeParams {
+  final String modelPath;
+  final List<Object> inputs;
+  final List<List<int>> inputShapes;
+  final int declaredOutputCount;
+
+  _TfliteComputeParams({
+    required this.modelPath,
+    required this.inputs,
+    required this.inputShapes,
+    required this.declaredOutputCount,
+  });
+}
+
+/// Infer the shape of a nested List by walking the first element at each depth.
+/// Mirrors [InferenceService._inferListShape] but usable in a compute() isolate.
+List<int> _inferShapeStatic(dynamic data) {
+  final dims = <int>[];
+  dynamic current = data;
+  while (current is List) {
+    dims.add((current as List).length);
+    if ((current as List).isEmpty) break;
+    current = (current as List).first;
+  }
+  return dims;
+}
+
+/// Runs TFLite inference in a background Dart isolate without pre-allocating
+/// output buffers. Uses [Interpreter.invoke] directly, then reads post-invoke
+/// tensor data for declared outputs only — completely avoids shape-mismatch
+/// errors caused by undeclared extra output tensors.
+Map<int, dynamic> _tfliteInferenceCompute(_TfliteComputeParams params) {
+  final options = InterpreterOptions()..threads = 4;
+  final interpreter = Interpreter.fromFile(
+    File(params.modelPath),
+    options: options,
+  );
+
+  // Resize input tensors to actual data shapes, then re-allocate.
+  for (int i = 0; i < params.inputShapes.length; i++) {
+    if (params.inputShapes[i].isNotEmpty) {
+      interpreter.resizeInputTensor(i, params.inputShapes[i]);
+    }
+  }
+  interpreter.allocateTensors();
+
+  // Copy input data into native input tensors.
+  final inputTensors = interpreter.getInputTensors();
+  for (int i = 0; i < params.inputs.length && i < inputTensors.length; i++) {
+    inputTensors[i].setTo(params.inputs[i]);
+  }
+
+  // Run inference — no output buffer map needed.
+  interpreter.invoke();
+
+  // Read only the declared output tensors using their correct post-invoke shapes.
+  final result = <int, dynamic>{};
+  final outputTensors = interpreter.getOutputTensors();
+  for (
+    int i = 0;
+    i < params.declaredOutputCount && i < outputTensors.length;
+    i++
+  ) {
+    final tensor = outputTensors[i];
+    final shape = List<int>.from(tensor.shape);
+    final numElements = shape.fold(1, (int a, int b) => a * b);
+    if (numElements <= 0) continue;
+
+    // We must reshape the buffers BEFORE copying, so the FFI shape check passes.
+    switch (tensor.type) {
+      case TensorType.float32:
+        final buf = ListShape(
+          List<double>.filled(numElements, 0.0),
+        ).reshape(shape);
+        tensor.copyTo(buf);
+        result[i] = buf;
+      case TensorType.uint8:
+      case TensorType.int8:
+        final buf = ListShape(List<int>.filled(numElements, 0)).reshape(shape);
+        tensor.copyTo(buf);
+        result[i] = buf;
+      case TensorType.int32:
+        final buf = ListShape(List<int>.filled(numElements, 0)).reshape(shape);
+        tensor.copyTo(buf);
+        result[i] = buf;
+      default:
+        final buf = ListShape(
+          List<double>.filled(numElements, 0.0),
+        ).reshape(shape);
+        tensor.copyTo(buf);
+        result[i] = buf;
+    }
+  }
+
+  interpreter.close();
+  return result;
+}
+
 // inference class that contains methods for loading models, pre and post processing, and running the actual inference
 class InferenceService {
   // initialize interpreter, pipeline (metadata), etc
@@ -33,7 +136,8 @@ class InferenceService {
   // Stores the preprocessed inputs from the last performInference call.
   // Used by the autoregressive 'generate' postprocessing step.
   Map<String, dynamic> _lastPreprocessedInputs = {};
-  bool get isReady => (_interpreter != null || _mediaPipeLlm != null) && modelPipeline != null;
+  bool get isReady =>
+      (_interpreter != null || _mediaPipeLlm != null) && modelPipeline != null;
 
   bool get _isMediaPipeLlm =>
       modelPipeline?.metadata.firstOrNull?.framework == 'mediapipe_litert';
@@ -58,7 +162,9 @@ class InferenceService {
 
   // Call this to initialize
   Future<void> initialize() async {
-    await loadPipeline(pipelinePath); // Load pipeline first to get model info if needed
+    await loadPipeline(
+      pipelinePath,
+    ); // Load pipeline first to get model info if needed
     if (_isMediaPipeLlm) {
       await _initializeMediaPipeLlm();
       return;
@@ -78,7 +184,8 @@ class InferenceService {
       for (final step in block.steps) {
         if (step.step == 'mediapipe_generate') {
           maxTokens = (step.params['max_tokens'] as num?)?.toInt() ?? maxTokens;
-          temperature = (step.params['temperature'] as num?)?.toDouble() ?? temperature;
+          temperature =
+              (step.params['temperature'] as num?)?.toDouble() ?? temperature;
           topK = (step.params['top_k'] as num?)?.toInt() ?? topK;
           randomSeed = (step.params['random_seed'] as num?)?.toInt();
           break;
@@ -96,12 +203,12 @@ class InferenceService {
       }
     }
     final modelTypeMap = {
-      'gemmaIt':   ModelType.gemmaIt,
-      'general':   ModelType.general,
-      'deepSeek':  ModelType.deepSeek,
-      'qwen':      ModelType.qwen,
-      'llama':     ModelType.llama,
-      'hammer':    ModelType.hammer,
+      'gemmaIt': ModelType.gemmaIt,
+      'general': ModelType.general,
+      'deepSeek': ModelType.deepSeek,
+      'qwen': ModelType.qwen,
+      'llama': ModelType.llama,
+      'hammer': ModelType.hammer,
     };
     final resolvedModelType = modelTypeMap[modelTypeStr] ?? ModelType.gemmaIt;
 
@@ -124,9 +231,10 @@ class InferenceService {
       final options = InterpreterOptions()..threads = 4;
 
       try {
-        _interpreter = isLocalFile
-            ? Interpreter.fromFile(File(modelPath), options: options)
-            : await Interpreter.fromAsset(modelPath, options: options);
+        _interpreter =
+            isLocalFile
+                ? Interpreter.fromFile(File(modelPath), options: options)
+                : await Interpreter.fromAsset(modelPath, options: options);
 
         _isolateInterpreter = await IsolateInterpreter.create(
           address: _interpreter!.address,
@@ -158,7 +266,8 @@ class InferenceService {
     } else {
       // Asset files are YAML.
       final contents = await rootBundle.loadString(pipelinePath);
-      pipelineMap = _convertYamlToJson(loadYaml(contents)) as Map<String, dynamic>;
+      pipelineMap =
+          _convertYamlToJson(loadYaml(contents)) as Map<String, dynamic>;
     }
 
     // create pipeline object from pipeline_map
@@ -179,6 +288,12 @@ class InferenceService {
           labelsUrl = step.params['labels_url'] as String?;
           break;
         }
+        if (step.step == 'ctc_decode') {
+          // Vocabulary for CTC decode is stored as the labels asset (one token per line).
+          // Fall through to load from localDir/labels or labels_url below.
+          labelsUrl = step.params['vocabulary_url'] as String?;
+          break;
+        }
       }
       if (labelsUrl != null) break;
     }
@@ -188,12 +303,15 @@ class InferenceService {
       final labelsFile = File('$localDir/labels');
       if (await labelsFile.exists()) {
         final labelsData = await labelsFile.readAsString();
-        _labels = labelsData
-            .split('\n')
-            .map((l) => l.trim())
-            .where((l) => l.isNotEmpty)
-            .toList();
-        debugPrint('InferenceService: Labels loaded from local file: ${_labels?.length} labels');
+        _labels =
+            labelsData
+                .split('\n')
+                .map((l) => l.trim())
+                .where((l) => l.isNotEmpty)
+                .toList();
+        debugPrint(
+          'InferenceService: Labels loaded from local file: ${_labels?.length} labels',
+        );
       } else {
         _labels = [];
         debugPrint('InferenceService: No local labels file found.');
@@ -263,7 +381,9 @@ class InferenceService {
     );
 
     if (_tokenizer == null) {
-      debugPrint('[InferenceService] Warning: text input detected but no tokenizer could be loaded.');
+      debugPrint(
+        '[InferenceService] Warning: text input detected but no tokenizer could be loaded.',
+      );
     } else {
       debugPrint('[InferenceService] Tokenizer loaded successfully.');
     }
@@ -466,7 +586,8 @@ class InferenceService {
     );
     // Autoregressive generate blocks produce their own output internally —
     // they don't read from rawOutputs, so skip the source tensor check.
-    final bool isAutoregressiveBlock = block.steps.isNotEmpty &&
+    final bool isAutoregressiveBlock =
+        block.steps.isNotEmpty &&
         block.steps.first.step == 'generate' &&
         (block.steps.first.params['mode'] as String?) == 'autoregressive';
 
@@ -569,6 +690,13 @@ class InferenceService {
         return ErrorResult(
           "Postprocessing for '$outputName' (text) did not produce a String. Got ${currentResult.runtimeType}",
         );
+      case 'speech_recognition':
+        if (currentResult is String) {
+          return SpeechResult(currentResult);
+        }
+        return ErrorResult(
+          "Postprocessing for '$outputName' (speech) did not produce a String. Got ${currentResult.runtimeType}",
+        );
       case 'segmentation_mask':
         if (currentResult is img.Image) {
           int numClasses = 1;
@@ -595,9 +723,10 @@ class InferenceService {
       case 'image_segmentation_masks':
         // Single-channel class-index mask: raw tensor shape [1, H, W, 1] uint8.
         // map_labels may have mangled currentResult, so read from rawOutputs directly.
-        final rawMask = block.source_tensors.isNotEmpty
-            ? rawOutputs[block.source_tensors[0]]
-            : null;
+        final rawMask =
+            block.source_tensors.isNotEmpty
+                ? rawOutputs[block.source_tensors[0]]
+                : null;
         if (rawMask == null) {
           return ErrorResult(
             "image_segmentation_masks: source tensor '${block.source_tensors.firstOrNull}' not found.",
@@ -621,9 +750,10 @@ class InferenceService {
             for (int h = 0; h < H; h++) {
               for (int w = 0; w < W; w++) {
                 final cell = (batch0[h] as List)[w];
-                final idx = cell is List
-                    ? (cell[0] as num).toInt()
-                    : (cell as num).toInt();
+                final idx =
+                    cell is List
+                        ? (cell[0] as num).toInt()
+                        : (cell as num).toInt();
                 if (idx + 1 > numClasses) numClasses = idx + 1;
               }
             }
@@ -649,7 +779,9 @@ class InferenceService {
             labels: _labels?.isNotEmpty == true ? _labels : null,
           );
         } catch (e) {
-          return ErrorResult("image_segmentation_masks colorization failed: $e");
+          return ErrorResult(
+            "image_segmentation_masks colorization failed: $e",
+          );
         }
       default:
         if (kDebugMode)
@@ -679,9 +811,12 @@ class InferenceService {
           // Use actual interpreter input tensor shape when available — overrides
           // the pipeline-declared size, which the LLM may have got wrong.
           final actualShape = _getActualInputShape(preprocessingBlockIndex, []);
-          if (actualShape.length == 4 && actualShape[1] > 0 && actualShape[2] > 0) {
+          if (actualShape.length == 4 &&
+              actualShape[1] > 0 &&
+              actualShape[2] > 0) {
             if (kDebugMode &&
-                (actualShape[1] != targetHeight || actualShape[2] != targetWidth)) {
+                (actualShape[1] != targetHeight ||
+                    actualShape[2] != targetWidth)) {
               debugPrint(
                 '[InferenceService] resize_image: pipeline size '
                 '${targetWidth}x${targetHeight} overridden by actual model '
@@ -723,7 +858,9 @@ class InferenceService {
             );
           }
           if (inputData is img.Image) {
-            return Uint8List.fromList(imgToBytes(inputData, normalizeColorSpace));
+            return Uint8List.fromList(
+              imgToBytes(inputData, normalizeColorSpace),
+            );
           }
           return inputData;
         }
@@ -875,7 +1012,10 @@ class InferenceService {
         // lastly, check that the shape is identical to the shape parameter of the input object
         List<int> targetInputShape = [];
         // Prefer actual interpreter input tensor shape (catches LLM-generated mismatches).
-        final actualInputShape = _getActualInputShape(preprocessingBlockIndex, []);
+        final actualInputShape = _getActualInputShape(
+          preprocessingBlockIndex,
+          [],
+        );
         if (actualInputShape.isNotEmpty) {
           targetInputShape = actualInputShape;
         } else {
@@ -932,17 +1072,21 @@ class InferenceService {
             "Step 'tokenize' expects a String input, got ${inputData.runtimeType}.",
           );
         }
-        final int paramMaxLength = (step.params['max_length'] as num?)?.toInt() ?? 512;
+        final int paramMaxLength =
+            (step.params['max_length'] as num?)?.toInt() ?? 512;
         // Use the interpreter's actual input tensor shape — the pipeline-declared
         // max_length may have been incorrectly generated (e.g. from n_ctx in config.json
         // rather than the TFLite model's baked-in positional embedding size).
         final int maxLength = _getModelInputSeqLen(fallback: paramMaxLength);
         if (kDebugMode && maxLength != paramMaxLength) {
-          debugPrint('[InferenceService] tokenize: pipeline max_length=$paramMaxLength overridden by actual model input shape=$maxLength.');
+          debugPrint(
+            '[InferenceService] tokenize: pipeline max_length=$paramMaxLength overridden by actual model input shape=$maxLength.',
+          );
         }
         final bool padding = step.params['padding'] as bool? ?? true;
         final bool truncation = step.params['truncation'] as bool? ?? true;
-        final bool addSpecialTokens = step.params['add_special_tokens'] as bool? ?? true;
+        final bool addSpecialTokens =
+            step.params['add_special_tokens'] as bool? ?? true;
 
         final List<int> tokenIds = _tokenizer!.encode(
           inputData,
@@ -952,10 +1096,20 @@ class InferenceService {
           addSpecialTokens: addSpecialTokens,
         );
         if (kDebugMode) {
-          debugPrint('[InferenceService] Tokenized to ${tokenIds.length} token IDs.');
+          debugPrint(
+            '[InferenceService] Tokenized to ${tokenIds.length} token IDs.',
+          );
         }
         // Wrap in an outer list to match shape [1, sequenceLength]
         return [tokenIds];
+
+      case 'resample_audio':
+        if (inputData is! Uint8List) {
+          throw ArgumentError(
+            "Step 'resample_audio' expects Uint8List (WAV bytes), got ${inputData.runtimeType}.",
+          );
+        }
+        return _resampleAudio(inputData, step.params, preprocessingBlockIndex);
 
       default:
         if (kDebugMode) {
@@ -963,6 +1117,136 @@ class InferenceService {
         }
         return inputData;
     }
+  }
+
+  /// Decodes WAV bytes, resamples to target sample rate, normalizes, and reshapes
+  /// to the model's expected input shape [1, N].
+  dynamic _resampleAudio(
+    Uint8List wavBytes,
+    Map<String, dynamic> params,
+    int preprocessingBlockIndex,
+  ) {
+    final int targetSampleRate =
+        (params['target_sample_rate'] as num?)?.toInt() ?? 16000;
+    final double maxDurationS =
+        (params['max_duration_s'] as num?)?.toDouble() ?? 10.0;
+    final bool normalize = params['normalize'] as bool? ?? true;
+
+    // --- Parse WAV header ---
+    // WAV format: RIFF chunk (12 bytes) + fmt sub-chunk + data sub-chunk
+    // We scan for the "data" marker to handle variable-length fmt chunks.
+    if (wavBytes.length < 44) {
+      throw FormatException("WAV file too short (${wavBytes.length} bytes).");
+    }
+    final ByteData header = ByteData.sublistView(wavBytes);
+
+    // Read fmt fields at fixed offsets (standard PCM WAV)
+    final int numChannels = header.getUint16(22, Endian.little);
+    final int sourceSampleRate = header.getInt32(24, Endian.little);
+    final int bitDepth = header.getUint16(34, Endian.little);
+
+    if (bitDepth != 16) {
+      throw FormatException(
+        "resample_audio only supports 16-bit PCM WAV, got $bitDepth-bit.",
+      );
+    }
+
+    // Scan for "data" sub-chunk marker
+    int dataOffset = -1;
+    int dataLength = 0;
+    for (int i = 12; i < wavBytes.length - 8; i++) {
+      if (wavBytes[i] == 0x64 && // 'd'
+          wavBytes[i + 1] == 0x61 && // 'a'
+          wavBytes[i + 2] == 0x74 && // 't'
+          wavBytes[i + 3] == 0x61) {
+        // 'a'
+        dataOffset = i + 8;
+        dataLength = header.getInt32(i + 4, Endian.little);
+        break;
+      }
+    }
+    if (dataOffset < 0) {
+      throw FormatException("WAV 'data' chunk not found.");
+    }
+
+    final int totalSamples = dataLength ~/ (bitDepth ~/ 8);
+    final int framesToRead = totalSamples ~/ numChannels;
+
+    // Read Int16 PCM samples
+    final Int16List pcm16 = wavBytes.buffer.asInt16List(
+      wavBytes.offsetInBytes + dataOffset,
+      totalSamples,
+    );
+
+    // Convert to float32 and mix down to mono
+    Float32List mono;
+    if (numChannels == 1) {
+      mono = Float32List(framesToRead);
+      for (int i = 0; i < framesToRead; i++) {
+        mono[i] = pcm16[i] / 32768.0;
+      }
+    } else {
+      mono = Float32List(framesToRead);
+      for (int i = 0; i < framesToRead; i++) {
+        double sum = 0.0;
+        for (int c = 0; c < numChannels; c++) {
+          sum += pcm16[i * numChannels + c];
+        }
+        mono[i] = sum / numChannels / 32768.0;
+      }
+    }
+
+    // Resample via linear interpolation if needed
+    Float32List resampled;
+    if (sourceSampleRate == targetSampleRate) {
+      resampled = mono;
+    } else {
+      final double ratio = sourceSampleRate / targetSampleRate;
+      final int outLen = (mono.length / ratio).ceil();
+      resampled = Float32List(outLen);
+      for (int i = 0; i < outLen; i++) {
+        final double srcPos = i * ratio;
+        final int srcIdx = srcPos.floor();
+        final double frac = srcPos - srcIdx;
+        if (srcIdx + 1 < mono.length) {
+          resampled[i] = mono[srcIdx] * (1.0 - frac) + mono[srcIdx + 1] * frac;
+        } else if (srcIdx < mono.length) {
+          resampled[i] = mono[srcIdx];
+        }
+      }
+    }
+
+    // Peak-normalize to [-1.0, 1.0]
+    if (normalize && resampled.isNotEmpty) {
+      double peak = 0.0;
+      for (final s in resampled) {
+        final abs = s.abs();
+        if (abs > peak) peak = abs;
+      }
+      if (peak > 0.0) {
+        for (int i = 0; i < resampled.length; i++) {
+          resampled[i] /= peak;
+        }
+      }
+    }
+
+    // Trim or zero-pad to target length
+    final int targetLen = (targetSampleRate * maxDurationS).round();
+    // Prefer actual interpreter shape if available
+    final actualShape = _getActualInputShape(preprocessingBlockIndex, []);
+    final int N =
+        (actualShape.length == 2 && actualShape[1] > 0)
+            ? actualShape[1]
+            : targetLen;
+
+    final Float32List output = Float32List(N);
+    final int copyLen = math.min(resampled.length, N);
+    for (int i = 0; i < copyLen; i++) {
+      output[i] = resampled[i];
+    }
+
+    // Reshape to [1, N] as nested list (tflite_flutter expects List for multi-dim inputs)
+    return output.reshape([1, N]);
   }
 
   // perform inference given inputs and target output buffers
@@ -1000,36 +1284,105 @@ class InferenceService {
       processedInputs.add(tempInput);
     }
 
-    // Create output buffers for EVERY model output tensor.
-    // tflite_flutter's runForMultipleInputs asserts outputs[i] != null for all
-    // interpreter tensors, so we must cover any extra tensors beyond the pipeline.
     List<IO> outputs = modelPipeline!.outputs;
 
     // Skip the initial inference pass for autoregressive pipelines — the
     // 'generate' postprocessing step runs its own loop from _lastPreprocessedInputs
     // and ignores this output entirely, so running it here is wasted work.
     final bool isAutoregressive = modelPipeline!.postprocessing.any(
-      (block) => block.steps.any((s) => s.step == 'generate' && (s.params['mode'] as String?) == 'autoregressive'),
+      (block) => block.steps.any(
+        (s) =>
+            s.step == 'generate' &&
+            (s.params['mode'] as String?) == 'autoregressive',
+      ),
     );
+
+    // Resize input tensors to actual data shapes so that dynamic output shapes
+    // are propagated correctly by allocateTensors().
+    if (_interpreter != null) {
+      bool resized = false;
+      for (int i = 0; i < processedInputs.length; i++) {
+        final shape = _inferListShape(processedInputs[i]);
+        if (shape.isNotEmpty) {
+          _interpreter!.resizeInputTensor(i, shape);
+          resized = true;
+        }
+      }
+      if (resized) _interpreter!.allocateTensors();
+    }
 
     Map<String, dynamic> inferenceOutputs = {};
     if (!isAutoregressive) {
-      Map<int, Object> outputBuffers = _buildOutputBuffers(outputs);
-      if (kDebugMode) {
-        debugPrint("Running inference on model.");
-      }
-      await _isolateInterpreter!.runForMultipleInputs(processedInputs, outputBuffers);
-      debugPrint("Inference completed.");
-      if (kDebugMode) {
-        developer.log("Inspecting outputBuffers variable from the TFLite inference.");
-        developer.inspect(outputBuffers);
-      }
-      for (int i = 0; i < outputs.length; i++) {
-        inferenceOutputs[outputs[i].name] = outputBuffers[i];
+      // Models that expose more output tensors than the pipeline declares (e.g.
+      // CTC ASR wav2vec2 with 13 tensors, 12 undeclared) cannot use
+      // IsolateInterpreter.runForMultipleInputs: that API null-checks EVERY
+      // tensor index and its pre-allocated buffer must match the post-invoke
+      // shape — impossible to guarantee for undeclared dynamic tensors.
+      // Solution: compute() + invoke() reads native tensor data after inference
+      // with correct post-invoke shapes; undeclared extras are simply ignored.
+      final actualTensorCount =
+          _interpreter?.getOutputTensors().length ?? outputs.length;
+      final hasExtraOutputs = isLocalFile && actualTensorCount > outputs.length;
+
+      if (hasExtraOutputs) {
+        if (kDebugMode) {
+          debugPrint(
+            '[performInference] $actualTensorCount output tensors, '
+            '${outputs.length} declared → using compute() + invoke() path.',
+          );
+        }
+        final inputShapes = processedInputs.map(_inferListShape).toList();
+        final computeResult = await compute(
+          _tfliteInferenceCompute,
+          _TfliteComputeParams(
+            modelPath: modelPath,
+            inputs: processedInputs,
+            inputShapes: inputShapes,
+            declaredOutputCount: outputs.length,
+          ),
+        );
+        if (kDebugMode) debugPrint('Inference completed (compute path).');
+        for (int i = 0; i < outputs.length; i++) {
+          if (computeResult.containsKey(i)) {
+            inferenceOutputs[outputs[i].name] = computeResult[i];
+          }
+        }
+      } else {
+        // Standard path: IsolateInterpreter with pre-allocated output buffers.
+        // Safe when the model exposes only the pipeline-declared output tensors.
+        Map<int, Object> outputBuffers = _buildOutputBuffers(outputs);
+        if (kDebugMode) debugPrint("Running inference on model.");
+        await _isolateInterpreter!.runForMultipleInputs(
+          processedInputs,
+          outputBuffers,
+        );
+        debugPrint("Inference completed.");
+        if (kDebugMode) {
+          developer.log(
+            "Inspecting outputBuffers variable from the TFLite inference.",
+          );
+          developer.inspect(outputBuffers);
+        }
+        final actualOutputTensors = _interpreter?.getOutputTensors();
+        for (int i = 0; i < outputs.length; i++) {
+          final flat = outputBuffers[i];
+          final List<int> shape =
+              (actualOutputTensors != null && i < actualOutputTensors.length)
+                  ? List<int>.from(actualOutputTensors[i].shape)
+                  : outputs[i].shape;
+          inferenceOutputs[outputs[i].name] = switch (flat) {
+            Float32List f => f.reshape(shape),
+            Uint8List u => u.reshape(shape),
+            Int32List il => ListShape(il.toList()).reshape(shape),
+            _ => flat,
+          };
+        }
       }
     } else {
       if (kDebugMode) {
-        debugPrint("Autoregressive pipeline — skipping initial inference pass.");
+        debugPrint(
+          "Autoregressive pipeline — skipping initial inference pass.",
+        );
       }
     }
 
@@ -1072,7 +1425,8 @@ class InferenceService {
   }
 
   Future<Map<String, InferenceResult>> _runMediaPipeLlmInference(
-      Map<String, dynamic> inputs) async {
+    Map<String, dynamic> inputs,
+  ) async {
     final prompt = inputs.values.first.toString();
 
     // Read per-session generation params from the pipeline config.
@@ -1082,9 +1436,11 @@ class InferenceService {
     for (final block in modelPipeline!.postprocessing) {
       for (final step in block.steps) {
         if (step.step == 'mediapipe_generate') {
-          temperature = (step.params['temperature'] as num?)?.toDouble() ?? temperature;
+          temperature =
+              (step.params['temperature'] as num?)?.toDouble() ?? temperature;
           topK = (step.params['top_k'] as num?)?.toInt() ?? topK;
-          randomSeed = (step.params['random_seed'] as num?)?.toInt() ?? randomSeed;
+          randomSeed =
+              (step.params['random_seed'] as num?)?.toInt() ?? randomSeed;
           break;
         }
       }
@@ -1107,21 +1463,50 @@ class InferenceService {
   List<List<int>> _buildSegmentationPalette(int numClasses, String? colorMap) {
     if (colorMap == 'pascal_voc') {
       return [
-        [0,0,0],[128,0,0],[0,128,0],[128,128,0],
-        [0,0,128],[128,0,128],[0,128,128],[128,128,128],
-        [64,0,0],[192,0,0],[64,128,0],[192,128,0],
-        [64,0,128],[192,0,128],[64,128,128],[192,128,128],
-        [0,64,0],[128,64,0],[0,192,0],[128,192,0],
-        [0,64,128],
+        [0, 0, 0],
+        [128, 0, 0],
+        [0, 128, 0],
+        [128, 128, 0],
+        [0, 0, 128],
+        [128, 0, 128],
+        [0, 128, 128],
+        [128, 128, 128],
+        [64, 0, 0],
+        [192, 0, 0],
+        [64, 128, 0],
+        [192, 128, 0],
+        [64, 0, 128],
+        [192, 0, 128],
+        [64, 128, 128],
+        [192, 128, 128],
+        [0, 64, 0],
+        [128, 64, 0],
+        [0, 192, 0],
+        [128, 192, 0],
+        [0, 64, 128],
       ];
     }
     if (colorMap == 'cityscapes') {
       return [
-        [128,64,128],[244,35,232],[70,70,70],[102,102,156],
-        [190,153,153],[153,153,153],[250,170,30],[220,220,0],
-        [107,142,35],[152,251,152],[70,130,180],[220,20,60],
-        [255,0,0],[0,0,142],[0,0,70],[0,60,100],
-        [0,80,100],[0,0,230],[119,11,32],
+        [128, 64, 128],
+        [244, 35, 232],
+        [70, 70, 70],
+        [102, 102, 156],
+        [190, 153, 153],
+        [153, 153, 153],
+        [250, 170, 30],
+        [220, 220, 0],
+        [107, 142, 35],
+        [152, 251, 152],
+        [70, 130, 180],
+        [220, 20, 60],
+        [255, 0, 0],
+        [0, 0, 142],
+        [0, 0, 70],
+        [0, 60, 100],
+        [0, 80, 100],
+        [0, 0, 230],
+        [119, 11, 32],
       ];
     }
     // Auto-generate evenly-spaced HSV hues.
@@ -1135,12 +1520,31 @@ class InferenceService {
       final double x = c * (1 - ((hue / 60) % 2 - 1).abs());
       final double m = v - c;
       double r1, g1, b1;
-      if (hue < 60)       { r1=c; g1=x; b1=0; }
-      else if (hue < 120) { r1=x; g1=c; b1=0; }
-      else if (hue < 180) { r1=0; g1=c; b1=x; }
-      else if (hue < 240) { r1=0; g1=x; b1=c; }
-      else if (hue < 300) { r1=x; g1=0; b1=c; }
-      else                { r1=c; g1=0; b1=x; }
+      if (hue < 60) {
+        r1 = c;
+        g1 = x;
+        b1 = 0;
+      } else if (hue < 120) {
+        r1 = x;
+        g1 = c;
+        b1 = 0;
+      } else if (hue < 180) {
+        r1 = 0;
+        g1 = c;
+        b1 = x;
+      } else if (hue < 240) {
+        r1 = 0;
+        g1 = x;
+        b1 = c;
+      } else if (hue < 300) {
+        r1 = x;
+        g1 = 0;
+        b1 = c;
+      } else {
+        r1 = c;
+        g1 = 0;
+        b1 = x;
+      }
       palette.add([
         ((r1 + m) * 255).round(),
         ((g1 + m) * 255).round(),
@@ -1167,37 +1571,45 @@ class InferenceService {
   /// Converts a tflite_flutter [TensorType] to the dtype string used by the pipeline schema.
   String _tensorTypeToDtype(TensorType type) {
     switch (type) {
-      case TensorType.float32: return 'float32';
-      case TensorType.int32:   return 'int32';
-      case TensorType.uint8:   return 'uint8';
-      case TensorType.int8:    return 'int8';
-      default:                 return 'float32';
+      case TensorType.float32:
+        return 'float32';
+      case TensorType.int32:
+        return 'int32';
+      case TensorType.uint8:
+        return 'uint8';
+      case TensorType.int8:
+        return 'int8';
+      default:
+        return 'float32';
     }
   }
 
   /// Builds the output buffer map for [runForMultipleInputs].
   ///
-  /// tflite_flutter iterates over ALL interpreter output tensors and asserts
-  /// each map entry is non-null. If the pipeline declares fewer outputs than
-  /// the model has, the missing indices would crash with a null check error.
-  /// This method creates a buffer for every actual output tensor.
+  /// Only called for models whose actual output tensor count equals the number
+  /// of pipeline-declared outputs (no extra undeclared tensors). Models with
+  /// extra undeclared outputs are handled by the compute() + invoke() path.
   Map<int, Object> _buildOutputBuffers(List<IO> pipelineOutputs) {
-    final actualTensors = _interpreter!.getOutputTensors();
     final buffers = <int, Object>{};
-    for (int i = 0; i < actualTensors.length; i++) {
-      final List<int> shape;
-      final String dtype;
-      if (i < pipelineOutputs.length) {
-        shape = _getActualOutputShape(i, pipelineOutputs[i].shape);
-        dtype = pipelineOutputs[i].dtype;
-      } else {
-        // Extra model output not declared in the pipeline — infer from the tensor.
-        shape = List<int>.from(actualTensors[i].shape);
-        dtype = _tensorTypeToDtype(actualTensors[i].type);
-      }
+    for (int i = 0; i < pipelineOutputs.length; i++) {
+      final shape = _getActualOutputShape(i, pipelineOutputs[i].shape);
+      final dtype = pipelineOutputs[i].dtype;
       buffers[i] = _createOutputBuffer(shape, dtype);
     }
     return buffers;
+  }
+
+  /// Infers the shape of a nested List by walking the first element at each depth.
+  /// Returns an empty list if [data] is not a List (e.g. a flat typed buffer).
+  List<int> _inferListShape(dynamic data) {
+    final dims = <int>[];
+    dynamic current = data;
+    while (current is List) {
+      dims.add((current as List).length);
+      if ((current as List).isEmpty) break;
+      current = (current as List).first;
+    }
+    return dims;
   }
 
   // helper method to create an output buffer, given an output shape and data type
@@ -1494,17 +1906,24 @@ class InferenceService {
 
         // Autoregressive: run the model in a loop, appending one token at a time.
         if (_interpreter == null || modelPipeline == null) {
-          throw StateError("Cannot run autoregressive generation: interpreter not ready.");
+          throw StateError(
+            "Cannot run autoregressive generation: interpreter not ready.",
+          );
         }
         if (_tokenizer == null) {
-          throw StateError("Cannot run autoregressive generation: tokenizer not loaded.");
+          throw StateError(
+            "Cannot run autoregressive generation: tokenizer not loaded.",
+          );
         }
 
-        final int maxNewTokens = (step.params['max_new_tokens'] as num?)?.toInt() ?? 128;
-        final double temperature = (step.params['temperature'] as num?)?.toDouble() ?? 0.8;
+        final int maxNewTokens =
+            (step.params['max_new_tokens'] as num?)?.toInt() ?? 128;
+        final double temperature =
+            (step.params['temperature'] as num?)?.toDouble() ?? 0.8;
         final bool doSample = step.params['do_sample'] as bool? ?? true;
         final int? eosTokenId = (step.params['eos_token_id'] as num?)?.toInt();
-        final double repetitionPenalty = (step.params['repetition_penalty'] as num?)?.toDouble() ?? 1.3;
+        final double repetitionPenalty =
+            (step.params['repetition_penalty'] as num?)?.toDouble() ?? 1.3;
 
         // Get initial token IDs from the preprocessed input (first text input).
         // _lastPreprocessedInputs is keyed by input tensor name; value is [List<int>].
@@ -1512,7 +1931,9 @@ class InferenceService {
         for (final entry in _lastPreprocessedInputs.entries) {
           final val = entry.value;
           if (val is List && val.isNotEmpty && val.first is List) {
-            currentIds = List<int>.from((val.first as List).map((e) => (e as num).toInt()));
+            currentIds = List<int>.from(
+              (val.first as List).map((e) => (e as num).toInt()),
+            );
           } else if (val is List<int>) {
             currentIds = List<int>.from(val);
           }
@@ -1520,20 +1941,28 @@ class InferenceService {
         }
 
         if (currentIds.isEmpty) {
-          throw StateError("Autoregressive generation: could not extract input token IDs.");
+          throw StateError(
+            "Autoregressive generation: could not extract input token IDs.",
+          );
         }
 
         // Trim padding from initial input before generating
         final int padId = _tokenizer!.padId;
         currentIds = currentIds.where((id) => id != padId).toList();
 
-        final int expectedSeqLen = _getModelInputSeqLen(fallback: currentIds.length);
+        final int expectedSeqLen = _getModelInputSeqLen(
+          fallback: currentIds.length,
+        );
 
         if (kDebugMode) {
-          debugPrint('[Generate] Dispatching to background isolate: '
-              'promptLen=${currentIds.length}, maxNewTokens=$maxNewTokens, '
-              'eosId=$eosTokenId, padId=$padId, seqLen=$expectedSeqLen');
-          debugPrint('[Generate] Prompt decoded: "${_tokenizer!.decode(currentIds, skipSpecialTokens: false)}"');
+          debugPrint(
+            '[Generate] Dispatching to background isolate: '
+            'promptLen=${currentIds.length}, maxNewTokens=$maxNewTokens, '
+            'eosId=$eosTokenId, padId=$padId, seqLen=$expectedSeqLen',
+          );
+          debugPrint(
+            '[Generate] Prompt decoded: "${_tokenizer!.decode(currentIds, skipSpecialTokens: false)}"',
+          );
         }
 
         if (!isLocalFile) {
@@ -1562,8 +1991,10 @@ class InferenceService {
 
         processedOutput = generatedTokens;
         if (kDebugMode) {
-          debugPrint('[Generate] Done: ${generatedTokens.length} tokens. '
-              'First 20 IDs: ${generatedTokens.take(20).toList()}');
+          debugPrint(
+            '[Generate] Done: ${generatedTokens.length} tokens. '
+            'First 20 IDs: ${generatedTokens.take(20).toList()}',
+          );
         }
 
       // decode a list of token IDs back to a string
@@ -1573,14 +2004,20 @@ class InferenceService {
             "Postprocessing step 'decode_tokens' requires a tokenizer, but none was loaded.",
           );
         }
-        final bool skipSpecial = step.params['skip_special_tokens'] as bool? ?? true;
+        final bool skipSpecial =
+            step.params['skip_special_tokens'] as bool? ?? true;
 
         // Flatten nested lists to a flat List<int>
         List<int> ids = _flattenToIntList(processedOutput);
-        processedOutput = _tokenizer!.decode(ids, skipSpecialTokens: skipSpecial);
+        processedOutput = _tokenizer!.decode(
+          ids,
+          skipSpecialTokens: skipSpecial,
+        );
 
         if (kDebugMode) {
-          debugPrint("[InferenceService] Decoded ${ids.length} token IDs to text.");
+          debugPrint(
+            "[InferenceService] Decoded ${ids.length} token IDs to text.",
+          );
         }
 
       case 'decode_segmentation_mask':
@@ -1605,7 +2042,10 @@ class InferenceService {
               double bestScore = double.negativeInfinity;
               for (int c = 0; c < cell.length; c++) {
                 final s = (cell[c] as num).toDouble();
-                if (s > bestScore) { bestScore = s; bestClass = c; }
+                if (s > bestScore) {
+                  bestScore = s;
+                  bestClass = c;
+                }
               }
             } else {
               // [1, H, W]: value is already the class index
@@ -1616,6 +2056,61 @@ class InferenceService {
           }
         }
         processedOutput = maskImg;
+
+      case 'ctc_decode':
+        // Input: logits tensor [1, T, vocab_size] from the model output.
+        // Algorithm: greedy CTC decode — argmax per timestep, collapse duplicates, remove blanks.
+        final int blankId = (step.params['blank_id'] as num?)?.toInt() ?? 0;
+        final String wordDelimiter =
+            step.params['word_delimiter'] as String? ?? '|';
+
+        List logitsTensor = processedOutput as List;
+        // Strip batch dim only for 3-D tensors [1, T, V] → [T, V].
+        // For 2-D [T, V] tensors, logitsTensor[0] is a frame (List of numbers)
+        // whose first element is a number, not a List — skip the strip.
+        if (logitsTensor.isNotEmpty &&
+            logitsTensor[0] is List &&
+            (logitsTensor[0] as List).isNotEmpty &&
+            (logitsTensor[0] as List)[0] is List) {
+          logitsTensor = logitsTensor[0] as List;
+        }
+
+        // Greedy argmax over vocab dimension for each timestep
+        final List<int> rawIds = [];
+        for (final timestep in logitsTensor) {
+          final frame = timestep as List;
+          int bestId = 0;
+          double bestScore = double.negativeInfinity;
+          for (int v = 0; v < frame.length; v++) {
+            final score = (frame[v] as num).toDouble();
+            if (score > bestScore) {
+              bestScore = score;
+              bestId = v;
+            }
+          }
+          rawIds.add(bestId);
+        }
+
+        // CTC collapse: remove consecutive duplicates, then remove blanks
+        final List<int> collapsedIds = [];
+        int? prevId;
+        for (final id in rawIds) {
+          if (id != prevId) {
+            if (id != blankId) collapsedIds.add(id);
+            prevId = id;
+          }
+        }
+
+        // Map token IDs to characters using _labels vocabulary
+        final StringBuffer sb = StringBuffer();
+        final vocab = _labels ?? [];
+        for (final id in collapsedIds) {
+          if (id < vocab.length) {
+            final token = vocab[id];
+            sb.write(token == wordDelimiter ? ' ' : token);
+          }
+        }
+        processedOutput = sb.toString().trim();
 
       default:
         if (kDebugMode) {
@@ -1702,7 +2197,6 @@ class InferenceService {
     if (value is num) return [value.toInt()];
     return [];
   }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1755,33 +2249,44 @@ List<int> _runGenerateIsolate(_GenerateRequest req) {
     for (int i = 0; i < tensors.length; i++) {
       final shape = List<int>.from(tensors[i].shape);
       final total = shape.reduce((a, b) => a * b);
-      buffers[i] = tensors[i].type == TensorType.float32
-          ? ListShape(List<double>.filled(total, 0.0)).reshape(shape)
-          : ListShape(List<int>.filled(total, 0)).reshape(shape);
+      buffers[i] =
+          tensors[i].type == TensorType.float32
+              ? ListShape(List<double>.filled(total, 0.0)).reshape(shape)
+              : ListShape(List<int>.filled(total, 0)).reshape(shape);
     }
     return buffers;
   }
 
   final options = InterpreterOptions()..threads = 4;
-  final interpreter = Interpreter.fromFile(File(req.modelPath), options: options);
+  final interpreter = Interpreter.fromFile(
+    File(req.modelPath),
+    options: options,
+  );
 
   List<int> currentIds = List<int>.from(req.inputIds);
   final List<int> generatedTokens = [];
 
   for (int step = 0; step < req.maxNewTokens; step++) {
     // Sliding window: keep the most recent seqLen tokens.
-    final List<int> contextIds = currentIds.length > req.seqLen
-        ? currentIds.sublist(currentIds.length - req.seqLen)
-        : currentIds;
+    final List<int> contextIds =
+        currentIds.length > req.seqLen
+            ? currentIds.sublist(currentIds.length - req.seqLen)
+            : currentIds;
 
     // Right-pad so real tokens are at the front; causal attention means pad
     // positions at the back cannot influence earlier positions' outputs.
-    final List<int> paddedIds = contextIds.length < req.seqLen
-        ? [...contextIds, ...List.filled(req.seqLen - contextIds.length, req.padId)]
-        : List<int>.from(contextIds);
+    final List<int> paddedIds =
+        contextIds.length < req.seqLen
+            ? [
+              ...contextIds,
+              ...List.filled(req.seqLen - contextIds.length, req.padId),
+            ]
+            : List<int>.from(contextIds);
 
     final Map<int, Object> buffers = buildBuffers(interpreter);
-    interpreter.runForMultipleInputs([[paddedIds]], buffers);
+    interpreter.runForMultipleInputs([
+      [paddedIds],
+    ], buffers);
 
     // logits shape: [1, seqLen, vocabSize] or [1, vocabSize]
     final dynamic raw = buffers[0];
@@ -1789,9 +2294,10 @@ List<int> _runGenerateIsolate(_GenerateRequest req) {
     List<dynamic> lastLogits;
     if (raw is List && raw.isNotEmpty) {
       final batch = raw[0] as List;
-      lastLogits = (batch.isNotEmpty && batch[0] is List)
-          ? batch[lastRealPos] as List<dynamic>
-          : batch.cast<dynamic>();
+      lastLogits =
+          (batch.isNotEmpty && batch[0] is List)
+              ? batch[lastRealPos] as List<dynamic>
+              : batch.cast<dynamic>();
     } else {
       break;
     }
@@ -1802,9 +2308,10 @@ List<int> _runGenerateIsolate(_GenerateRequest req) {
       final seen = <int>{...currentIds, ...generatedTokens};
       for (final id in seen) {
         if (id >= 0 && id < logits.length) {
-          logits[id] = logits[id] > 0
-              ? logits[id] / req.repetitionPenalty
-              : logits[id] * req.repetitionPenalty;
+          logits[id] =
+              logits[id] > 0
+                  ? logits[id] / req.repetitionPenalty
+                  : logits[id] * req.repetitionPenalty;
         }
       }
     }
@@ -1815,7 +2322,10 @@ List<int> _runGenerateIsolate(_GenerateRequest req) {
       nextToken = 0;
       double best = logits[0];
       for (int i = 1; i < logits.length; i++) {
-        if (logits[i] > best) { best = logits[i]; nextToken = i; }
+        if (logits[i] > best) {
+          best = logits[i];
+          nextToken = i;
+        }
       }
     } else {
       final scaled = logits.map((v) => v / req.temperature).toList();
@@ -1827,7 +2337,10 @@ List<int> _runGenerateIsolate(_GenerateRequest req) {
       nextToken = probs.length - 1;
       for (int i = 0; i < probs.length; i++) {
         r -= probs[i];
-        if (r <= 0) { nextToken = i; break; }
+        if (r <= 0) {
+          nextToken = i;
+          break;
+        }
       }
     }
 

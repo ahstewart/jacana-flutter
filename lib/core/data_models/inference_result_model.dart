@@ -54,6 +54,14 @@ class SegmentationResult extends InferenceResult {
   img.Image get results => mask;
 }
 
+class SpeechResult extends InferenceResult {
+  final String transcription;
+  SpeechResult(this.transcription);
+
+  @override
+  String get results => transcription;
+}
+
 class ErrorResult extends InferenceResult {
   final String errorMessage;
   ErrorResult(this.errorMessage) {
