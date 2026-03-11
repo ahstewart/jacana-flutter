@@ -14,6 +14,8 @@ import 'dart:developer' as developer;
 import 'package:yaml/yaml.dart';
 import '../data_models/pipeline.dart';
 import '../data_models/inference_result_model.dart';
+import '../data_models/inference_stat.dart';
+import '../services/stats_service.dart';
 import '../utils/list_extensions.dart';
 import '../utils/data_types.dart';
 import '../utils/math.dart';
@@ -153,12 +155,20 @@ class InferenceService {
   // Required when isLocalFile is true.
   final String? localDir;
 
+  // Optional stat recording — set when the model has a known version ID.
+  final String? modelVersionId;
+  final String? modelDisplayName;
+  final StatsService? _statsService;
+
   InferenceService({
     required this.modelPath,
     required this.pipelinePath,
     this.isLocalFile = false,
     this.localDir,
-  });
+    this.modelVersionId,
+    this.modelDisplayName,
+    StatsService? statsService,
+  }) : _statsService = statsService;
 
   // Call this to initialize
   Future<void> initialize() async {
@@ -1251,9 +1261,75 @@ class InferenceService {
 
   // perform inference given inputs and target output buffers
   // order of inferenceInputs will be mapped directly to the order of the pipeline inputs, so they must match
-  // on the Flutter screen implementation
-  // inferenceInputs is map keyed by the input name, so that the given input
+  // ── Public entry point (times the run and records stats) ─────────────────
+
   Future<Map<String, InferenceResult>> performInference(
+    Map<String, dynamic> inferenceInputs,
+  ) async {
+    final sw = Stopwatch()..start();
+    Map<String, InferenceResult> results = {};
+    bool success = true;
+    try {
+      results = await _doInference(inferenceInputs);
+      success = !results.values.any((r) => r is ErrorResult);
+      return results;
+    } catch (e) {
+      success = false;
+      rethrow;
+    } finally {
+      sw.stop();
+      if (modelVersionId != null && _statsService != null) {
+        _recordStat(sw.elapsedMilliseconds, success, results);
+      }
+    }
+  }
+
+  void _recordStat(
+    int ms,
+    bool success,
+    Map<String, InferenceResult> results,
+  ) {
+    double? topConfidence;
+    int? numResults;
+    for (final result in results.values) {
+      if (result is ClassificationResult && result.results.isNotEmpty) {
+        topConfidence =
+            (result.results.first['confidence'] as num?)?.toDouble();
+        numResults = result.results.length;
+        break;
+      } else if (result is DetectionResult) {
+        final all = result.results.values.expand((v) => v).toList();
+        numResults = all.length;
+        if (all.isNotEmpty) {
+          final confs =
+              all.map((d) => (d['confidence'] as num? ?? 0).toDouble());
+          topConfidence = confs.reduce((a, b) => a + b) / confs.length;
+        }
+        break;
+      }
+    }
+
+    final stat = InferenceStat(
+      modelVersionId: modelVersionId!,
+      modelName: modelDisplayName ?? '',
+      taskType: modelPipeline?.metadata.firstOrNull?.model_task,
+      timestamp: DateTime.now(),
+      totalInferenceMs: ms,
+      success: success,
+      topConfidence: topConfidence,
+      numResults: numResults,
+      deviceModel: DeviceInfoHelper.cachedDeviceModel,
+      platform: Platform.isAndroid ? 'android' : 'ios',
+    );
+
+    // Fire-and-forget — stat recording must never delay inference results.
+    _statsService!.recordStat(stat).catchError((_) {});
+  }
+
+  // ── Internal inference implementation ────────────────────────────────────
+
+  // inferenceInputs is map keyed by the input name, so that the given input
+  Future<Map<String, InferenceResult>> _doInference(
     Map<String, dynamic> inferenceInputs,
   ) async {
     if (_isMediaPipeLlm) {

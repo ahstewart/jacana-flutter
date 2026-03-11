@@ -2,6 +2,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import '../data_models/api_models.dart';
+import '../data_models/inference_stat.dart';
 
 class ApiService {
   // TODO: Update this to your actual backend URL
@@ -145,6 +146,34 @@ class ApiService {
       }
     } catch (e) {
       debugPrint('Error downloading asset "$assetKey" for version $versionId: $e');
+      rethrow;
+    }
+  }
+
+  // ==========================================
+  // TELEMETRY API
+  // ==========================================
+
+  /// Upload a batch of inference stats to the backend.
+  /// Only called when the user is authenticated and has opted in.
+  Future<void> uploadTelemetryBatch({
+    required List<InferenceStat> stats,
+    required String authToken,
+  }) async {
+    try {
+      final response = await _httpClient.post(
+        Uri.parse('$baseUrl/telemetry/batch'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $authToken',
+        },
+        body: jsonEncode({'stats': stats.map((s) => s.toApiJson()).toList()}),
+      );
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        throw Exception('Telemetry upload failed: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('Error uploading telemetry: $e');
       rethrow;
     }
   }

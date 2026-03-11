@@ -8,6 +8,8 @@ import 'package:image/image.dart' as img;
 import 'dart:developer' as developer;
 import '../../core/data_models/inference_result_model.dart';
 import '../../core/services/inferenceService.dart';
+import '../../core/services/stats_service.dart';
+import '../../core/providers/stats_providers.dart';
 import '../../core/utils/painters.dart';
 import '../../core/widgets/image_inference_shell.dart';
 
@@ -16,6 +18,8 @@ class ObjectDetectionWidget extends ConsumerStatefulWidget {
   final String pipelinePath;
   final bool isLocalFile;
   final String? localDir;
+  final String? modelVersionId;
+  final String? modelDisplayName;
 
   const ObjectDetectionWidget({
     super.key,
@@ -23,6 +27,8 @@ class ObjectDetectionWidget extends ConsumerStatefulWidget {
     required this.pipelinePath,
     this.isLocalFile = false,
     this.localDir,
+    this.modelVersionId,
+    this.modelDisplayName,
   });
 
   @override
@@ -59,6 +65,9 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
       pipelinePath: widget.pipelinePath,
       isLocalFile: widget.isLocalFile,
       localDir: widget.localDir,
+      modelVersionId: widget.modelVersionId,
+      modelDisplayName: widget.modelDisplayName,
+      statsService: widget.modelVersionId != null ? StatsService() : null,
     );
     _initFuture = _inferenceObject.initialize();
   }
@@ -121,6 +130,12 @@ class _ObjectDetectionWidgetState extends ConsumerState<ObjectDetectionWidget> {
       if (kDebugMode) debugPrint('Inference error: $e');
       setState(() => _recognitions = []);
     } finally {
+      if (widget.modelVersionId != null) {
+        ref.read(telemetryServiceProvider).syncIfEligible(
+          optedIn: ref.read(telemetryOptInProvider),
+          authToken: null,
+        ).ignore();
+      }
       setState(() => _isLoading = false);
     }
   }

@@ -18,6 +18,9 @@ import 'features/text_generation/text_generation.dart';
 import 'features/semantic_segmentation/semantic_segmentation.dart';
 import 'features/automatic_speech_recognition/asr_widget.dart';
 import 'package:path_provider/path_provider.dart';
+import 'core/services/stats_service.dart';
+import 'core/providers/stats_providers.dart';
+import 'core/data_models/inference_stat.dart';
 
 // Returns free bytes available on the filesystem containing [dirPath], or null on failure.
 Future<int?> _getFreeDiskBytes(String dirPath) async {
@@ -43,8 +46,9 @@ String _formatBytes(int bytes) {
   return '$bytes B';
 }
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await DeviceInfoHelper.init();
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details); // Still show red screen in debug
     debugPrint('Caught by global error handler: ${details.exception}');
@@ -71,19 +75,119 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Pocket AI',
       theme: ThemeData(
-        primarySwatch: Colors.indigo,
-        visualDensity: VisualDensity.adaptivePlatformDensity,
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color.fromARGB(255, 23, 148, 12),
+        colorScheme: const ColorScheme.light(
+          primary: Color(0xFF0284C7),
+          onPrimary: Colors.white,
+          primaryContainer: Color(0xFFE0F2FE),
+          onPrimaryContainer: Color(0xFF0C4A6E),
+          secondary: Color(0xFF7C3AED),
+          onSecondary: Colors.white,
+          secondaryContainer: Color(0xFFEDE9FE),
+          onSecondaryContainer: Color(0xFF4C1D95),
+          surface: Colors.white,
+          onSurface: Color(0xFF0F172A),
+          surfaceContainerHighest: Color(0xFFF1F5F9),
+          onSurfaceVariant: Color(0xFF475569),
+          outline: Color(0xFFE2E8F0),
+          error: Color(0xFFDC2626),
+          onError: Colors.white,
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+        cardTheme: CardThemeData(
+          elevation: 0,
+          color: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: Color(0xFFE2E8F0)),
+          ),
+          margin: EdgeInsets.zero,
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.white,
+          foregroundColor: Color(0xFF0F172A),
+          elevation: 0,
+          scrolledUnderElevation: 1,
+          shadowColor: Color(0x1A000000),
+          titleTextStyle: TextStyle(
+            color: Color(0xFF0F172A),
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: Colors.white,
+          indicatorColor: const Color(0xFFE0F2FE),
+          elevation: 0,
+          shadowColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return const IconThemeData(color: Color(0xFF0284C7));
+            }
+            return const IconThemeData(color: Color(0xFF64748B));
+          }),
+          labelTextStyle: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return const TextStyle(
+                color: Color(0xFF0284C7),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              );
+            }
+            return const TextStyle(color: Color(0xFF64748B), fontSize: 12);
+          }),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.indigo[700],
+            backgroundColor: const Color(0xFF0284C7),
             foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            textStyle: const TextStyle(fontSize: 16),
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFF0284C7),
+            side: const BorderSide(color: Color(0xFF0284C7)),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(foregroundColor: const Color(0xFF0284C7)),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: Color(0xFF0284C7), width: 2),
+          ),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        ),
+        chipTheme: ChipThemeData(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+          labelPadding: const EdgeInsets.symmetric(horizontal: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+        ),
+        dividerTheme: const DividerThemeData(color: Color(0xFFE2E8F0), thickness: 1),
+        switchTheme: SwitchThemeData(
+          thumbColor: WidgetStateProperty.resolveWith((states) =>
+              states.contains(WidgetState.selected) ? const Color(0xFF0284C7) : null),
+          trackColor: WidgetStateProperty.resolveWith((states) =>
+              states.contains(WidgetState.selected) ? const Color(0xFFBAE6FD) : null),
         ),
       ),
       home: const ModelList(title: 'Pocket AI'),
@@ -234,6 +338,17 @@ class InProgressDownloadsNotifier
 }
 
 // Widget containing the model tile list
+IconData _taskIcon(String task) {
+  if (task.contains('classif')) return Icons.image_search;
+  if (task.contains('detect')) return Icons.center_focus_strong;
+  if (task.contains('segment')) return Icons.blur_circular;
+  if (task.contains('text') || task.contains('generat')) return Icons.text_fields;
+  if (task.contains('speech') || task.contains('audio') || task.contains('asr')) {
+    return Icons.mic;
+  }
+  return Icons.memory;
+}
+
 String _friendlyTask(String category) => category
     .split('_')
     .map((w) => w.isEmpty ? '' : '${w[0].toUpperCase()}${w.substring(1)}')
@@ -454,7 +569,7 @@ class _ModelsState extends ConsumerState<Models> {
                 child: ListView.separated(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                   itemCount: filtered.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (context, index) {
                     final model = filtered[index];
                     return _ModelCard(
@@ -490,91 +605,104 @@ class _ModelCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final taskLabel = model.task != null && model.task!.isNotEmpty
+        ? _friendlyTask(model.task!)
+        : _friendlyTask(model.category);
+    final icon = _taskIcon((model.task ?? model.category).toLowerCase());
 
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
             children: [
-              // Category + task badges
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: [
-                  Chip(
-                    label: Text(
-                      _friendlyTask(model.category),
-                      style: TextStyle(
-                        color: cs.onPrimaryContainer,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    backgroundColor: cs.primaryContainer,
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  if (model.task != null && model.task!.isNotEmpty)
-                    Chip(
-                      label: Text(
-                        _friendlyTask(model.task!),
-                        style: TextStyle(
-                          color: cs.onSecondaryContainer,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
+              // Icon box
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: cs.primary, size: 22),
+              ),
+              const SizedBox(width: 12),
+              // Text block
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            model.name,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: cs.onSurface,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ),
-                      backgroundColor: cs.secondaryContainer,
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: cs.secondaryContainer,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            taskLabel,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: cs.onSecondaryContainer,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              // Model name
-              Text(
-                model.name,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
+                    const SizedBox(height: 2),
+                    Text(
+                      model.description,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: cs.onSurfaceVariant),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(Icons.download_outlined,
+                            size: 12, color: cs.onSurfaceVariant),
+                        const SizedBox(width: 3),
+                        Text(
+                          _formatCount(model.total_download_count),
+                          style: theme.textTheme.labelSmall
+                              ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                        if (model.total_ratings > 0) ...[
+                          const SizedBox(width: 10),
+                          Icon(Icons.star_rounded,
+                              size: 12, color: Colors.amber[700]),
+                          const SizedBox(width: 3),
+                          Text(
+                            model.rating_weighted_avg.toStringAsFixed(1),
+                            style: theme.textTheme.labelSmall
+                                ?.copyWith(color: cs.onSurfaceVariant),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 4),
-              // Description
-              Text(
-                model.description,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 12),
-              // Stats row
-              Row(
-                children: [
-                  const Icon(Icons.download_outlined, size: 14),
-                  const SizedBox(width: 4),
-                  Text(
-                    _formatCount(model.total_download_count),
-                    style: theme.textTheme.labelSmall,
-                  ),
-                  const SizedBox(width: 16),
-                  const Icon(Icons.star_outline, size: 14),
-                  const SizedBox(width: 4),
-                  Text(
-                    model.total_ratings > 0
-                        ? '${model.rating_weighted_avg.toStringAsFixed(1)} (${_formatCount(model.total_ratings)})'
-                        : 'No ratings yet',
-                    style: theme.textTheme.labelSmall,
-                  ),
-                ],
-              ),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right, size: 18, color: cs.onSurfaceVariant),
             ],
           ),
         ),
@@ -602,8 +730,7 @@ class _ModelDetailsModalState extends ConsumerState<ModelDetailsModal> {
       insetPadding: const EdgeInsets.all(16.0),
       child: versionsAsync.when(
         data: (versions) {
-          final supportedVersions =
-              versions.where((v) => v.isUsable).toList();
+          final supportedVersions = versions.where((v) => v.isUsable).toList();
 
           if (supportedVersions.isEmpty) {
             return AlertDialog(
@@ -1024,8 +1151,7 @@ class ModelRange extends ConsumerWidget {
     return versionsAsync.when(
       data: (versions) {
         // Filter to only supported versions
-        final supportedVersions =
-            versions.where((v) => v.isUsable).toList();
+        final supportedVersions = versions.where((v) => v.isUsable).toList();
 
         if (supportedVersions.isEmpty) {
           return const Center(
@@ -1471,6 +1597,47 @@ class PipelineConfigDisplay extends StatelessWidget {
   }
 }
 
+class _VersionStatRow extends ConsumerWidget {
+  final String versionId;
+  const _VersionStatRow({required this.versionId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final summaryAsync = ref.watch(versionStatSummaryProvider(versionId));
+    return summaryAsync.when(
+      data: (summary) {
+        if (summary == null || summary.totalRuns == 0) {
+          return const SizedBox.shrink();
+        }
+        return Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Row(
+            children: [
+              const Icon(Icons.speed, size: 13),
+              const SizedBox(width: 4),
+              Text(
+                '${summary.totalRuns} run${summary.totalRuns == 1 ? '' : 's'} · avg ${summary.avgLatencyMs.toStringAsFixed(0)}ms',
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+              if (summary.avgConfidence! > 0) ...[
+                const SizedBox(width: 8),
+                const Icon(Icons.check_circle_outline, size: 13),
+                const SizedBox(width: 4),
+                Text(
+                  '${(summary.avgConfidence! * 100).toStringAsFixed(0)}% avg confidence',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+}
+
 // Widget to display downloaded models
 class DownloadedModels extends ConsumerStatefulWidget {
   const DownloadedModels({super.key});
@@ -1654,10 +1821,13 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
           ),
         // Count header
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
           child: Text(
             'My AI ($totalCount)',
-            style: Theme.of(context).textTheme.titleLarge,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: const Color(0xFF475569),
+                  fontWeight: FontWeight.w600,
+                ),
           ),
         ),
         // Scrollable content
@@ -1669,33 +1839,57 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
               children: [
                 // In-progress download cards (always visible regardless of filter)
                 for (final download in inProgress.values)
-                  Card(
-                    margin: const EdgeInsets.symmetric(vertical: 8.0),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            download.modelName,
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          const SizedBox(height: 4),
-                          Text('Version: ${download.versionName}'),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              const Icon(Icons.download_outlined, size: 16),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Downloading\u2026 ${(download.progress * 100).toInt()}%',
-                                style: Theme.of(context).textTheme.bodySmall,
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE0F2FE),
+                                borderRadius: BorderRadius.circular(10),
                               ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          LinearProgressIndicator(value: download.progress),
-                        ],
+                              child: const Icon(Icons.downloading,
+                                  color: Color(0xFF0284C7), size: 22),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    download.modelName,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(fontWeight: FontWeight.w600),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'v${download.versionName} · ${(download.progress * 100).toInt()}%',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                            color: const Color(0xFF475569)),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  LinearProgressIndicator(
+                                    value: download.progress,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -1707,95 +1901,107 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                   )
                 else
                   ...filtered.map(
-                    (model) => Card(
-                      margin: const EdgeInsets.symmetric(vertical: 8.0),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Task + category chips
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 4,
+                    (model) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () => _runModel(context, model),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            child: Row(
                               children: [
-                                if (model.category != 'unknown' &&
-                                    model.category.isNotEmpty)
-                                  Chip(
-                                    label: Text(
-                                      _friendlyTask(model.category),
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color:
-                                            Theme.of(
-                                              context,
-                                            ).colorScheme.onSecondaryContainer,
-                                      ),
-                                    ),
-                                    backgroundColor:
-                                        Theme.of(
-                                          context,
-                                        ).colorScheme.secondaryContainer,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 2,
-                                    ),
-                                    materialTapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
+                                Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primaryContainer,
+                                    borderRadius: BorderRadius.circular(10),
                                   ),
-                                if (model.modelCategory.isNotEmpty)
-                                  Chip(
-                                    label: Text(
-                                      _friendlyTask(model.modelCategory),
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color:
-                                            Theme.of(
-                                              context,
-                                            ).colorScheme.onPrimaryContainer,
-                                      ),
-                                    ),
-                                    backgroundColor:
-                                        Theme.of(
-                                          context,
-                                        ).colorScheme.primaryContainer,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 2,
-                                    ),
-                                    materialTapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
+                                  child: Icon(
+                                    _taskIcon(model.category.toLowerCase()),
+                                    color: Theme.of(context).colorScheme.primary,
+                                    size: 22,
                                   ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              model.modelName,
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                            const SizedBox(height: 4),
-                            Text('Version: ${model.versionName}'),
-                            Text(
-                              'Downloaded: ${model.downloadedAt.toString().split('.')[0]}',
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                ElevatedButton.icon(
-                                  onPressed: () => _runModel(context, model),
-                                  icon: const Icon(Icons.play_arrow),
-                                  label: const Text('Run Model'),
                                 ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              model.modelName,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .bodyMedium
+                                                  ?.copyWith(
+                                                      fontWeight:
+                                                          FontWeight.w600),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          if (model.category != 'unknown' &&
+                                              model.category.isNotEmpty)
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 6,
+                                                      vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .secondaryContainer,
+                                                borderRadius:
+                                                    BorderRadius.circular(4),
+                                              ),
+                                              child: Text(
+                                                _friendlyTask(model.category),
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSecondaryContainer,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        'v${model.versionName}',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                                color: const Color(0xFF475569)),
+                                      ),
+                                      _VersionStatRow(
+                                          versionId: model.versionId),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
                                 IconButton(
-                                  icon: const Icon(Icons.delete_outline),
+                                  icon: const Icon(Icons.delete_outline,
+                                      size: 20),
+                                  color: const Color(0xFF94A3B8),
                                   onPressed: () {
                                     ref
                                         .read(downloadedModelsProvider.notifier)
                                         .removeDownloadedModel(model.versionId);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
-                                        content: Text(
-                                          'Model removed successfully',
-                                        ),
+                                        content:
+                                            Text('Model removed successfully'),
                                         duration: Duration(seconds: 2),
                                       ),
                                     );
@@ -1803,7 +2009,7 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                                 ),
                               ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
@@ -1829,6 +2035,8 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
           pipelinePath: pipelinePath,
           isLocalFile: true,
           localDir: model.localPath,
+          modelVersionId: model.versionId,
+          modelDisplayName: model.modelName,
         );
       case 'object_detection':
       case 'object-detection':
@@ -1837,6 +2045,8 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
           pipelinePath: pipelinePath,
           isLocalFile: true,
           localDir: model.localPath,
+          modelVersionId: model.versionId,
+          modelDisplayName: model.modelName,
         );
       case 'text_generation':
       case 'text-generation':
@@ -1845,6 +2055,8 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
           pipelinePath: pipelinePath,
           isLocalFile: true,
           localDir: model.localPath,
+          modelVersionId: model.versionId,
+          modelDisplayName: model.modelName,
         );
       case 'semantic_segmentation':
       case 'image_segmentation':
@@ -1856,6 +2068,8 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
           pipelinePath: pipelinePath,
           isLocalFile: true,
           localDir: model.localPath,
+          modelVersionId: model.versionId,
+          modelDisplayName: model.modelName,
         );
       case 'automatic_speech_recognition':
       case 'automatic-speech-recognition':
@@ -1864,6 +2078,8 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
           pipelinePath: pipelinePath,
           isLocalFile: true,
           localDir: model.localPath,
+          modelVersionId: model.versionId,
+          modelDisplayName: model.modelName,
         );
       default:
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1884,12 +2100,376 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
 }
 
 // widget for the user
-class Profile extends StatelessWidget {
+class Profile extends ConsumerStatefulWidget {
   const Profile({super.key});
 
   @override
+  ConsumerState<Profile> createState() => _ProfileState();
+}
+
+class _ProfileState extends ConsumerState<Profile> {
+  @override
+  void initState() {
+    super.initState();
+    // Invalidate cached stats so they're fresh when the tab is opened.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _invalidateStats());
+  }
+
+  void _invalidateStats() {
+    final models = ref.read(downloadedModelsProvider);
+    for (final m in models) {
+      ref.invalidate(versionStatSummaryProvider(m.versionId));
+      ref.invalidate(versionStatsProvider(m.versionId));
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Text('This is where the user profile will show up');
+    final optedIn = ref.watch(telemetryOptInProvider);
+    final downloadedModels = ref.watch(downloadedModelsProvider);
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return RefreshIndicator(
+      onRefresh: () async => _invalidateStats(),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const SizedBox(height: 8),
+          Text('Profile', style: theme.textTheme.headlineSmall),
+          const SizedBox(height: 24),
+
+          // ── Privacy ────────────────────────────────────────────────────────
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Privacy', style: theme.textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Inference stats are always stored locally on your device. '
+                    'Enable below to share them anonymously — requires signing in to your Pocket AI account.',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Share inference telemetry'),
+                    subtitle: const Text(
+                      'Latency, accuracy metrics, and device model — no personal data.',
+                    ),
+                    value: optedIn,
+                    onChanged: (v) =>
+                        ref.read(telemetryOptInProvider.notifier).setValue(v),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Inference Stats ────────────────────────────────────────────────
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Inference Stats', style: theme.textTheme.titleMedium),
+              IconButton(
+                icon: const Icon(Icons.refresh, size: 20),
+                tooltip: 'Refresh stats',
+                onPressed: _invalidateStats,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          if (downloadedModels.isEmpty)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+                child: Center(
+                  child: Text(
+                    'Download models from the Home tab to see inference stats here.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                ),
+              ),
+            )
+          else
+            ...downloadedModels.map(
+              (model) => _ModelStatCard(model: model),
+            ),
+
+          const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Per-model stats card ────────────────────────────────────────────────────
+
+class _ModelStatCard extends ConsumerStatefulWidget {
+  final DownloadedModel model;
+  const _ModelStatCard({required this.model});
+
+  @override
+  ConsumerState<_ModelStatCard> createState() => _ModelStatCardState();
+}
+
+class _ModelStatCardState extends ConsumerState<_ModelStatCard> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final summaryAsync =
+        ref.watch(versionStatSummaryProvider(widget.model.versionId));
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => setState(() => _expanded = !_expanded),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (widget.model.category != 'unknown' &&
+                            widget.model.category.isNotEmpty)
+                          Chip(
+                            label: Text(
+                              _friendlyTask(widget.model.category),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: cs.onSecondaryContainer,
+                              ),
+                            ),
+                            backgroundColor: cs.secondaryContainer,
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 2),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        const SizedBox(height: 4),
+                        Text(
+                          widget.model.modelName,
+                          style: theme.textTheme.titleSmall,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          'v${widget.model.versionName}',
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ],
+              ),
+              const Divider(height: 20),
+
+              // Summary + optional recent runs
+              summaryAsync.when(
+                data: (summary) {
+                  if (summary == null || summary.totalRuns == 0) {
+                    return Text(
+                      'No inference runs recorded yet.',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: cs.onSurfaceVariant),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _StatsSummaryRow(summary: summary),
+                      if (_expanded) ...[
+                        const SizedBox(height: 16),
+                        _RecentRunsList(versionId: widget.model.versionId),
+                      ],
+                    ],
+                  );
+                },
+                loading: () => const LinearProgressIndicator(),
+                error: (_, __) => Text(
+                  'Could not load stats.',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: cs.error),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Summary stat row ────────────────────────────────────────────────────────
+
+class _StatsSummaryRow extends StatelessWidget {
+  final InferenceStatSummary summary;
+  const _StatsSummaryRow({required this.summary});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 16,
+      runSpacing: 8,
+      children: [
+        _StatChip(
+          icon: Icons.play_circle_outline,
+          label: '${summary.totalRuns} run${summary.totalRuns == 1 ? '' : 's'}',
+        ),
+        _StatChip(
+          icon: Icons.speed,
+          label: '${summary.avgLatencyMs.toStringAsFixed(0)} ms avg',
+        ),
+        _StatChip(
+          icon: Icons.check_circle_outline,
+          label: '${(summary.successRate * 100).toStringAsFixed(0)}% success',
+        ),
+        if (summary.avgConfidence != null && summary.avgConfidence! > 0)
+          _StatChip(
+            icon: Icons.star_outline,
+            label:
+                '${(summary.avgConfidence! * 100).toStringAsFixed(0)}% conf',
+          ),
+        if (summary.lastRunAt != null)
+          _StatChip(
+            icon: Icons.history,
+            label: _timeAgo(summary.lastRunAt!),
+          ),
+      ],
+    );
+  }
+
+  static String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${dt.month}/${dt.day}/${dt.year}';
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _StatChip({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: cs.onSurfaceVariant),
+        const SizedBox(width: 4),
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+      ],
+    );
+  }
+}
+
+// ── Recent runs list (expanded view) ───────────────────────────────────────
+
+class _RecentRunsList extends ConsumerWidget {
+  final String versionId;
+  const _RecentRunsList({required this.versionId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final statsAsync = ref.watch(versionStatsProvider(versionId));
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return statsAsync.when(
+      data: (stats) {
+        if (stats.isEmpty) return const SizedBox.shrink();
+        final recent = stats.take(10).toList();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Recent runs',
+              style: theme.textTheme.labelMedium
+                  ?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 8),
+            ...recent.map((s) => _RunRow(stat: s)),
+          ],
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+    );
+  }
+}
+
+class _RunRow extends StatelessWidget {
+  final InferenceStat stat;
+  const _RunRow({required this.stat});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final dt = stat.timestamp;
+    final dateLabel =
+        '${dt.month}/${dt.day} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(
+            stat.success ? Icons.check_circle : Icons.error_outline,
+            size: 14,
+            color: stat.success ? Colors.green : cs.error,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            dateLabel,
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          const SizedBox(width: 12),
+          Text('${stat.totalInferenceMs} ms',
+              style: theme.textTheme.labelSmall),
+          if (stat.topConfidence != null) ...[
+            const SizedBox(width: 12),
+            Text(
+              '${(stat.topConfidence! * 100).toStringAsFixed(0)}% conf',
+              style: theme.textTheme.labelSmall,
+            ),
+          ],
+          const Spacer(),
+          if (stat.synced)
+            Icon(Icons.cloud_done_outlined, size: 12,
+                color: cs.onSurfaceVariant),
+        ],
+      ),
+    );
   }
 }
 
@@ -1936,64 +2516,62 @@ class _ModelList extends ConsumerState<ModelList> {
     // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Center(child: Text(widget.title)),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Expanded(child: pages[selectedIndex]),
-
-            // This is the nav bar
-            SafeArea(
-              child: NavigationBar(
-                destinations: [
-                  NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
-                  NavigationDestination(
-                    icon: Icon(Icons.cloud_download),
-                    label: 'My AI',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.science),
-                    label: 'Range',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.person),
-                    label: 'Profile',
-                  ),
-                ],
-                selectedIndex: selectedIndex,
-                onDestinationSelected: (int index) {
-                  setState(() {
-                    ref.read(selectedIndexProvider.notifier).state = index;
-                  });
-                },
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0284C7),
+                borderRadius: BorderRadius.circular(6),
               ),
+              child: const Icon(Icons.psychology, color: Colors.white, size: 18),
             ),
+            const SizedBox(width: 8),
+            const Text('Pocket AI'),
           ],
         ),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+        centerTitle: true,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: const Color(0xFFE2E8F0)),
+        ),
+      ),
+      body: Column(
+        children: [
+          Expanded(child: pages[selectedIndex]),
+          Container(height: 1, color: const Color(0xFFE2E8F0)),
+          NavigationBar(
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home),
+                label: 'Home',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.cloud_download_outlined),
+                selectedIcon: Icon(Icons.cloud_download),
+                label: 'My AI',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.science_outlined),
+                selectedIcon: Icon(Icons.science),
+                label: 'Range',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.person_outline),
+                selectedIcon: Icon(Icons.person),
+                label: 'Profile',
+              ),
+            ],
+            selectedIndex: selectedIndex,
+            onDestinationSelected: (int index) {
+              ref.read(selectedIndexProvider.notifier).state = index;
+            },
+          ),
+        ],
+      ),
     );
   }
 }

@@ -7,6 +7,8 @@ import 'package:image/image.dart' as img;
 import '../../core/data_models/inference_result_model.dart';
 import '../../core/data_models/pipeline.dart';
 import '../../core/services/inferenceService.dart';
+import '../../core/services/stats_service.dart';
+import '../../core/providers/stats_providers.dart';
 import '../../core/widgets/image_inference_shell.dart';
 
 class ImageClassificationWidget extends ConsumerStatefulWidget {
@@ -14,6 +16,8 @@ class ImageClassificationWidget extends ConsumerStatefulWidget {
   final String pipelinePath;
   final bool isLocalFile;
   final String? localDir;
+  final String? modelVersionId;
+  final String? modelDisplayName;
 
   const ImageClassificationWidget({
     super.key,
@@ -21,6 +25,8 @@ class ImageClassificationWidget extends ConsumerStatefulWidget {
     required this.pipelinePath,
     this.isLocalFile = false,
     this.localDir,
+    this.modelVersionId,
+    this.modelDisplayName,
   });
 
   @override
@@ -47,6 +53,9 @@ class _ImageClassificationWidgetState
       pipelinePath: widget.pipelinePath,
       isLocalFile: widget.isLocalFile,
       localDir: widget.localDir,
+      modelVersionId: widget.modelVersionId,
+      modelDisplayName: widget.modelDisplayName,
+      statsService: widget.modelVersionId != null ? StatsService() : null,
     );
     _initFuture = _inferenceObject.initialize();
   }
@@ -116,6 +125,12 @@ class _ImageClassificationWidgetState
             {'label': 'Error', 'confidence': 0.0},
           ]);
     } finally {
+      if (widget.modelVersionId != null) {
+        ref.read(telemetryServiceProvider).syncIfEligible(
+          optedIn: ref.read(telemetryOptInProvider),
+          authToken: null,
+        ).ignore();
+      }
       setState(() => _isLoading = false);
     }
   }

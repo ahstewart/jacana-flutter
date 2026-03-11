@@ -10,12 +10,16 @@ import 'package:record/record.dart';
 
 import '../../core/data_models/inference_result_model.dart';
 import '../../core/services/inferenceService.dart';
+import '../../core/services/stats_service.dart';
+import '../../core/providers/stats_providers.dart';
 
 class AutomaticSpeechRecognitionWidget extends ConsumerStatefulWidget {
   final String modelName;
   final String pipelinePath;
   final bool isLocalFile;
   final String? localDir;
+  final String? modelVersionId;
+  final String? modelDisplayName;
 
   const AutomaticSpeechRecognitionWidget({
     super.key,
@@ -23,6 +27,8 @@ class AutomaticSpeechRecognitionWidget extends ConsumerStatefulWidget {
     required this.pipelinePath,
     this.isLocalFile = false,
     this.localDir,
+    this.modelVersionId,
+    this.modelDisplayName,
   });
 
   @override
@@ -53,6 +59,9 @@ class _AutomaticSpeechRecognitionWidgetState
       pipelinePath: widget.pipelinePath,
       isLocalFile: widget.isLocalFile,
       localDir: widget.localDir,
+      modelVersionId: widget.modelVersionId,
+      modelDisplayName: widget.modelDisplayName,
+      statsService: widget.modelVersionId != null ? StatsService() : null,
     );
     _initFuture = _svc.initialize();
   }
@@ -178,6 +187,12 @@ class _AutomaticSpeechRecognitionWidgetState
       _inferenceWatch.stop();
       _inferenceTimer?.cancel();
       _inferenceTimer = null;
+      if (widget.modelVersionId != null) {
+        ref.read(telemetryServiceProvider).syncIfEligible(
+          optedIn: ref.read(telemetryOptInProvider),
+          authToken: null,
+        ).ignore();
+      }
       setState(() => _isRunning = false);
     }
   }
