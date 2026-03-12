@@ -104,6 +104,11 @@ class MyApp extends StatelessWidget {
           onSecondary: Color(0xFF1A1A1A),
           secondaryContainer: Color(0xFFFEF0C3),
           onSecondaryContainer: Color(0xFF4F3A07),
+          // Tertiary: Wing Shield Teal — FAB, highlighted chips, tonal buttons
+          tertiary: Color(0xFF0D9488),
+          onTertiary: Colors.white,
+          tertiaryContainer: Color(0xFFCCFBF1),
+          onTertiaryContainer: Color(0xFF134E4A),
           // Surfaces
           surface: Colors.white,
           onSurface: Color(0xFF1A1A1A),
@@ -415,6 +420,23 @@ IconData _taskIcon(String task) {
   return Icons.memory;
 }
 
+/// Returns (containerColor, onContainerColor) for a task type.
+/// Teal for text generation, blue for speech, amber for image, primary for others.
+(Color, Color) _taskColors(String task, ColorScheme cs) {
+  if (task.contains('text') || task.contains('generat')) {
+    return (const Color(0xFFCCFBF1), const Color(0xFF134E4A)); // teal container
+  }
+  if (task.contains('speech') || task.contains('audio') || task.contains('asr')) {
+    return (const Color(0xFFDBEAFE), const Color(0xFF1E3A8A)); // blue container
+  }
+  return (cs.primaryContainer, cs.onPrimaryContainer);
+}
+
+/// Returns the best pipeline status for a model, using the pre-computed
+/// backend field best_version_status.
+String _bestStatus(MLModel model) =>
+    model.best_version_status ?? 'unsupported';
+
 String _friendlyTask(String category) => category
     .split('_')
     .map((w) => w.isEmpty ? '' : '${w[0].toUpperCase()}${w.substring(1)}')
@@ -436,8 +458,8 @@ class Models extends ConsumerStatefulWidget {
 class _ModelsState extends ConsumerState<Models> {
   final _searchController = TextEditingController();
   String _searchQuery = '';
-  String? _selectedCategory;
   String? _selectedTask;
+  String? _selectedStatus;
   String _sortOrder = 'downloads'; // 'downloads' | 'rating' | 'newest'
 
   @override
@@ -456,9 +478,7 @@ class _ModelsState extends ConsumerState<Models> {
           return const Center(child: Text('No supported models available'));
         }
 
-        // Collect unique categories and tasks, sorted alphabetically
-        final categories =
-            modelList.map((m) => m.category).toSet().toList()..sort();
+        // Collect unique tasks, sorted alphabetically
         final tasks =
             modelList
                 .map((m) => m.task)
@@ -468,20 +488,21 @@ class _ModelsState extends ConsumerState<Models> {
                 .toList()
               ..sort();
 
-        // Apply search, category, and task filters
+        // Apply search, task filters, and hide unsupported models
         var filtered =
             modelList.where((m) {
+              if (_bestStatus(m) == 'unsupported') return false;
               final q = _searchQuery.toLowerCase();
               final matchesSearch =
                   q.isEmpty ||
                   m.name.toLowerCase().contains(q) ||
                   m.description.toLowerCase().contains(q) ||
                   (m.task?.toLowerCase().contains(q) ?? false);
-              final matchesCategory =
-                  _selectedCategory == null || m.category == _selectedCategory;
               final matchesTask =
                   _selectedTask == null || m.task == _selectedTask;
-              return matchesSearch && matchesCategory && matchesTask;
+              final matchesStatus =
+                  _selectedStatus == null || _bestStatus(m) == _selectedStatus;
+              return matchesSearch && matchesTask && matchesStatus;
             }).toList();
 
         // Apply sort
@@ -529,46 +550,12 @@ class _ModelsState extends ConsumerState<Models> {
                 onChanged: (v) => setState(() => _searchQuery = v),
               ),
             ),
-            // Category filter chips + sort button
+            // Sort button
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
               child: Row(
                 children: [
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            child: FilterChip(
-                              label: const Text('All'),
-                              selected: _selectedCategory == null,
-                              onSelected:
-                                  (_) =>
-                                      setState(() => _selectedCategory = null),
-                            ),
-                          ),
-                          for (final category in categories)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                              ),
-                              child: FilterChip(
-                                label: Text(_friendlyTask(category)),
-                                selected: _selectedCategory == category,
-                                onSelected:
-                                    (selected) => setState(
-                                      () =>
-                                          _selectedCategory =
-                                              selected ? category : null,
-                                    ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
+                  const Spacer(),
                   PopupMenuButton<String>(
                     icon: const Icon(Icons.sort),
                     tooltip: 'Sort by',
@@ -623,6 +610,31 @@ class _ModelsState extends ConsumerState<Models> {
                   ),
                 ),
               ),
+            // Status filter chips
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final entry in const [
+                      (null, 'All'),
+                      ('supported', 'Supported'),
+                      ('pending', 'Pending'),
+                    ])
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: FilterChip(
+                          label: Text(entry.$2),
+                          selected: _selectedStatus == entry.$1,
+                          onSelected: (_) =>
+                              setState(() => _selectedStatus = entry.$1),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
             // Model list or empty state
             if (filtered.isEmpty)
               const Expanded(
@@ -734,7 +746,9 @@ class _ModelCard extends StatelessWidget {
         model.task != null && model.task!.isNotEmpty
             ? _friendlyTask(model.task!)
             : _friendlyTask(model.category);
-    final icon = _taskIcon((model.task ?? model.category).toLowerCase());
+    final taskKey = (model.task ?? model.category).toLowerCase();
+    final icon = _taskIcon(taskKey);
+    final (containerColor, onContainerColor) = _taskColors(taskKey, cs);
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -744,15 +758,15 @@ class _ModelCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
-              // Icon box
+              // Icon box — teal for text gen, blue for speech, primary for others
               Container(
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: cs.primaryContainer,
+                  color: containerColor,
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(icon, color: cs.primary, size: 22),
+                child: Icon(icon, color: onContainerColor, size: 22),
               ),
               const SizedBox(width: 12),
               // Text block
@@ -780,7 +794,7 @@ class _ModelCard extends StatelessWidget {
                             vertical: 2,
                           ),
                           decoration: BoxDecoration(
-                            color: cs.secondaryContainer,
+                            color: containerColor,
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
@@ -788,7 +802,7 @@ class _ModelCard extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w600,
-                              color: cs.onSecondaryContainer,
+                              color: onContainerColor,
                             ),
                           ),
                         ),
@@ -806,31 +820,76 @@ class _ModelCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Icon(
-                          Icons.download_outlined,
-                          size: 12,
-                          color: cs.onSurfaceVariant,
-                        ),
+                        // Downloads
+                        Icon(Icons.download_outlined, size: 12, color: cs.onSurfaceVariant),
                         const SizedBox(width: 3),
                         Text(
                           _formatCount(model.total_download_count),
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: cs.onSurfaceVariant,
-                          ),
+                          style: theme.textTheme.labelSmall?.copyWith(color: cs.onSurfaceVariant),
                         ),
+                        // Rating
                         if (model.total_ratings > 0) ...[
-                          const SizedBox(width: 10),
-                          Icon(
-                            Icons.star_rounded,
-                            size: 12,
-                            color: Colors.amber[700],
-                          ),
+                          const SizedBox(width: 8),
+                          Icon(Icons.star_rounded, size: 12, color: Colors.amber[700]),
                           const SizedBox(width: 3),
                           Text(
                             model.rating_weighted_avg.toStringAsFixed(1),
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: cs.onSurfaceVariant,
-                            ),
+                            style: theme.textTheme.labelSmall?.copyWith(color: cs.onSurfaceVariant),
+                          ),
+                        ],
+                        // Version count
+                        if (model.version_count > 0) ...[
+                          const SizedBox(width: 8),
+                          Icon(Icons.layers_outlined, size: 12, color: cs.onSurfaceVariant),
+                          const SizedBox(width: 3),
+                          Text(
+                            '${model.version_count}',
+                            style: theme.textTheme.labelSmall?.copyWith(color: cs.onSurfaceVariant),
+                          ),
+                        ],
+                        // Status dot
+                        ...[
+                          const SizedBox(width: 8),
+                          Builder(builder: (context) {
+                            final status = _bestStatus(model);
+                            final color = status == 'supported'
+                                ? Colors.green[600]!
+                                : status == 'pending'
+                                    ? Colors.amber[700]!
+                                    : cs.outlineVariant;
+                            final label = status == 'supported'
+                                ? 'Supported'
+                                : status == 'pending'
+                                    ? 'Pending'
+                                    : 'Unsupported';
+                            return Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 3),
+                                Text(
+                                  label,
+                                  style: theme.textTheme.labelSmall?.copyWith(color: color),
+                                ),
+                              ],
+                            );
+                          }),
+                        ],
+                        // File size
+                        if (model.file_size_bytes > 0) ...[
+                          const SizedBox(width: 8),
+                          Icon(Icons.sd_storage_outlined, size: 12, color: cs.onSurfaceVariant),
+                          const SizedBox(width: 3),
+                          Text(
+                            _formatBytes(model.file_size_bytes),
+                            style: theme.textTheme.labelSmall?.copyWith(color: cs.onSurfaceVariant),
                           ),
                         ],
                       ],
@@ -898,27 +957,11 @@ class _ModelDetailsModalState extends ConsumerState<ModelDetailsModal> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Category + task badges
+                        // Task badge
                         Wrap(
                           spacing: 6,
                           runSpacing: 4,
                           children: [
-                            Chip(
-                              label: Text(
-                                _friendlyTask(widget.model.category),
-                                style: TextStyle(
-                                  color: cs.onPrimaryContainer,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              backgroundColor: cs.primaryContainer,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                              ),
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                            ),
                             if (widget.model.task != null &&
                                 widget.model.task!.isNotEmpty)
                               Chip(
@@ -1128,6 +1171,10 @@ class _VersionTileState extends ConsumerState<_VersionTile> {
                       )
                       : ElevatedButton.icon(
                         onPressed: _handleDownload,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0D9488),
+                          foregroundColor: Colors.white,
+                        ),
                         icon: const Icon(Icons.download),
                         label: const Text('Download'),
                       ),
@@ -1291,19 +1338,35 @@ class RangeTab extends ConsumerWidget {
 
     // check if no model has been selected
     if (selectedModel == null) {
+      final downloaded = ref.watch(downloadedModelsProvider);
+      final hasDownloads = downloaded.isNotEmpty;
+      final theme = Theme.of(context);
+      final cs = theme.colorScheme;
+
       return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Select a model to take out to the range'),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: () {
-                ref.read(selectedIndexProvider.notifier).state = 0;
-              },
-              child: const Text('Browse Models'),
-            ),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.radar, size: 56, color: cs.outline),
+              const SizedBox(height: 16),
+              Text(
+                'Take a model out on the range',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              const SizedBox(height: 24),
+              FilledButton.tonal(
+                onPressed: () {
+                  ref.read(selectedIndexProvider.notifier).state =
+                      hasDownloads ? 1 : 0;
+                },
+                child: Text(hasDownloads ? 'Go to My AI' : 'Browse Models'),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -1342,7 +1405,6 @@ class RangeTab extends ConsumerWidget {
                 ),
                 const SizedBox(height: 8),
                 Text('Description: ${selectedModel.description}'),
-                Text('Category: ${selectedModel.category}'),
                 Text('Total Downloads: ${selectedModel.total_download_count}'),
                 const SizedBox(height: 16),
                 Text(
@@ -1996,39 +2058,6 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                         onSelected:
                             (selected) => setState(
                               () => _selectedTask = selected ? task : null,
-                            ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        // Category filter chips
-        if (categories.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: FilterChip(
-                      label: const Text('All Categories'),
-                      selected: _selectedCategory == null,
-                      onSelected:
-                          (_) => setState(() => _selectedCategory = null),
-                    ),
-                  ),
-                  for (final cat in categories)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: FilterChip(
-                        label: Text(_friendlyTask(cat)),
-                        selected: _selectedCategory == cat,
-                        onSelected:
-                            (selected) => setState(
-                              () => _selectedCategory = selected ? cat : null,
                             ),
                       ),
                     ),
@@ -2831,21 +2860,6 @@ class _ModelStatCardState extends ConsumerState<_ModelStatCard> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (widget.model.category != 'unknown' &&
-                            widget.model.category.isNotEmpty)
-                          Chip(
-                            label: Text(
-                              _friendlyTask(widget.model.category),
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: cs.onSecondaryContainer,
-                              ),
-                            ),
-                            backgroundColor: cs.secondaryContainer,
-                            padding: const EdgeInsets.symmetric(horizontal: 2),
-                            materialTapTargetSize:
-                                MaterialTapTargetSize.shrinkWrap,
-                          ),
                         const SizedBox(height: 4),
                         Text(
                           widget.model.modelName,
@@ -3240,17 +3254,11 @@ class _ModelList extends ConsumerState<ModelList> {
     // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(
-              width: 34,
-              height: 34,
-              child: CustomPaint(painter: JacanaLogoPainter()),
-            ),
-            const SizedBox(width: 8),
-            const Text('Jacana'),
-          ],
+        title: Image.asset(
+          'assets/images/logo_with_name.png',
+          height: 60,
+          color: Colors.white,
+          colorBlendMode: BlendMode.srcIn,
         ),
         centerTitle: true,
         bottom: PreferredSize(

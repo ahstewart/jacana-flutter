@@ -161,7 +161,7 @@ class ApiService {
   Future<List<int>> downloadAsset(String versionId, String assetKey) async {
     try {
       final uri = Uri.parse('$baseUrl/versions/$versionId/download/$assetKey');
-      final response = await _httpClient.get(uri).timeout(_apiTimeout);
+      final response = await _httpClient.get(uri);
 
       if (response.statusCode == 200) {
         return response.bodyBytes;

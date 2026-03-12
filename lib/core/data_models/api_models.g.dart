@@ -214,6 +214,9 @@ MLModel _$MLModelFromJson(Map<String, dynamic> json) => MLModel(
   total_ratings: (json['total_ratings'] as num).toInt(),
   rating_weighted_avg: (json['rating_weighted_avg'] as num).toDouble(),
   created_at: json['created_at'] as String,
+  version_count: (json['version_count'] as num?)?.toInt() ?? 0,
+  file_size_bytes: (json['file_size_bytes'] as num?)?.toInt() ?? 0,
+  best_version_status: json['best_version_status'] as String?,
   versions:
       (json['versions'] as List<dynamic>?)
           ?.map((e) => ModelVersion.fromJson(e as Map<String, dynamic>))
@@ -233,5 +236,8 @@ Map<String, dynamic> _$MLModelToJson(MLModel instance) => <String, dynamic>{
   'total_ratings': instance.total_ratings,
   'rating_weighted_avg': instance.rating_weighted_avg,
   'created_at': instance.created_at,
+  'version_count': instance.version_count,
+  'file_size_bytes': instance.file_size_bytes,
+  'best_version_status': instance.best_version_status,
   'versions': instance.versions,
 };

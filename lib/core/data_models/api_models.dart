@@ -231,6 +231,9 @@ class MLModel {
   final int total_ratings;
   final double rating_weighted_avg;
   final String created_at;
+  final int version_count;
+  final int file_size_bytes;
+  final String? best_version_status;
   final List<ModelVersion>?
   versions; // Optional, for when versions are included
 
@@ -247,6 +250,9 @@ class MLModel {
     required this.total_ratings,
     required this.rating_weighted_avg,
     required this.created_at,
+    this.version_count = 0,
+    this.file_size_bytes = 0,
+    this.best_version_status,
     this.versions,
   });
 
