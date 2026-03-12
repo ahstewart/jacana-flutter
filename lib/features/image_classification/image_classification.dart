@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
 import '../../core/data_models/inference_result_model.dart';
-import '../../core/data_models/pipeline.dart';
 import '../../core/services/inferenceService.dart';
 import '../../core/services/stats_service.dart';
 import '../../core/providers/stats_providers.dart';
@@ -70,8 +69,7 @@ class _ImageClassificationWidgetState
     if (_isLoading) return;
 
     try {
-      final XFile? picked =
-          await ImagePicker().pickImage(source: source);
+      final XFile? picked = await ImagePicker().pickImage(source: source);
       if (picked == null) return;
 
       final imageFile = File(picked.path);
@@ -93,22 +91,27 @@ class _ImageClassificationWidgetState
         for (final input in _inferenceObject.modelPipeline!.inputs)
           input.name: _decodedImage,
       };
-      final inferenceResults =
-          await _inferenceObject.performInference(inputMap);
+      final inferenceResults = await _inferenceObject.performInference(
+        inputMap,
+      );
 
-      final first = inferenceResults.isNotEmpty
-          ? inferenceResults.values.first
-          : null;
+      final first =
+          inferenceResults.isNotEmpty ? inferenceResults.values.first : null;
       if (first is ClassificationResult) {
         final recognitions = List<Map<String, dynamic>>.from(first.results);
         recognitions.removeWhere((r) => r['confidence'] == null);
-        recognitions.sort((a, b) =>
-            (b['confidence'] as double).compareTo(a['confidence'] as double));
+        recognitions.sort(
+          (a, b) =>
+              (b['confidence'] as double).compareTo(a['confidence'] as double),
+        );
         setState(() => _recognitions = recognitions);
       } else {
-        setState(() => _recognitions = [
-              {'label': 'Error running model', 'confidence': 0.0},
-            ]);
+        setState(
+          () =>
+              _recognitions = [
+                {'label': 'Error running model', 'confidence': 0.0},
+              ],
+        );
       }
 
       // Read top_k from pipeline if present.
@@ -121,15 +124,21 @@ class _ImageClassificationWidgetState
       }
     } catch (e) {
       if (kDebugMode) debugPrint('Inference error: $e');
-      setState(() => _recognitions = [
-            {'label': 'Error', 'confidence': 0.0},
-          ]);
+      setState(
+        () =>
+            _recognitions = [
+              {'label': 'Error', 'confidence': 0.0},
+            ],
+      );
     } finally {
       if (widget.modelVersionId != null) {
-        ref.read(telemetryServiceProvider).syncIfEligible(
-          optedIn: ref.read(telemetryOptInProvider),
-          authToken: null,
-        ).ignore();
+        ref
+            .read(telemetryServiceProvider)
+            .syncIfEligible(
+              optedIn: ref.read(telemetryOptInProvider),
+              authToken: null,
+            )
+            .ignore();
       }
       setState(() => _isLoading = false);
     }
@@ -175,7 +184,9 @@ class _ImageClassificationWidgetState
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 10),
-          ..._recognitions!.take(_numResults).map(
+          ..._recognitions!
+              .take(_numResults)
+              .map(
                 (rec) => Text(
                   '${rec['label']} (${((rec['confidence'] as num) * 100).toStringAsFixed(1)}%)',
                   style: const TextStyle(fontSize: 16),

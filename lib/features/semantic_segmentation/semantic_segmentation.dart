@@ -101,24 +101,28 @@ class _SemanticSegmentationWidgetState
 
       final first = results.values.firstOrNull;
       if (first is SegmentationResult) {
-        final pngBytes = img.encodePng(first.mask) as Uint8List;
+        final pngBytes = img.encodePng(first.mask);
         setState(() {
           _result = first;
           _maskPngBytes = pngBytes;
         });
       } else {
         setState(
-            () => _error = 'Unexpected result type: ${first?.runtimeType}');
+          () => _error = 'Unexpected result type: ${first?.runtimeType}',
+        );
       }
     } catch (e) {
       if (kDebugMode) debugPrint('[Segmentation] Inference error: $e');
       setState(() => _error = e.toString());
     } finally {
       if (widget.modelVersionId != null) {
-        ref.read(telemetryServiceProvider).syncIfEligible(
-          optedIn: ref.read(telemetryOptInProvider),
-          authToken: null,
-        ).ignore();
+        ref
+            .read(telemetryServiceProvider)
+            .syncIfEligible(
+              optedIn: ref.read(telemetryOptInProvider),
+              authToken: null,
+            )
+            .ignore();
       }
       setState(() => _isLoading = false);
     }
@@ -134,8 +138,10 @@ class _SemanticSegmentationWidgetState
           color: Colors.grey[200],
         ),
         child: const Center(
-          child: Text('No image selected.',
-              style: TextStyle(color: Colors.grey)),
+          child: Text(
+            'No image selected.',
+            style: TextStyle(color: Colors.grey),
+          ),
         ),
       );
     }
@@ -164,8 +170,7 @@ class _SemanticSegmentationWidgetState
 
   Widget? _buildResults() {
     if (_error != null) {
-      return Text('Error: $_error',
-          style: const TextStyle(color: Colors.red));
+      return Text('Error: $_error', style: const TextStyle(color: Colors.red));
     }
     if (_result != null) {
       return _buildLegend(_result!);
@@ -174,8 +179,10 @@ class _SemanticSegmentationWidgetState
   }
 
   /// Returns up to [maxClasses] most-frequent class indices from the mask.
-  List<(int, int)> _getTopClasses(SegmentationResult result,
-      {int maxClasses = 10}) {
+  List<(int, int)> _getTopClasses(
+    SegmentationResult result, {
+    int maxClasses = 10,
+  }) {
     final palette = result.palette;
     final Map<int, int> freq = {};
     for (final pixel in result.mask) {
@@ -183,16 +190,14 @@ class _SemanticSegmentationWidgetState
       final g = pixel.g.toInt();
       final b = pixel.b.toInt();
       for (int i = 0; i < palette.length; i++) {
-        if (palette[i][0] == r &&
-            palette[i][1] == g &&
-            palette[i][2] == b) {
+        if (palette[i][0] == r && palette[i][1] == g && palette[i][2] == b) {
           freq[i] = (freq[i] ?? 0) + 1;
           break;
         }
       }
     }
-    final sorted = freq.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
+    final sorted =
+        freq.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
     return sorted.take(maxClasses).map((e) => (e.key, e.value)).toList();
   }
 
@@ -204,29 +209,31 @@ class _SemanticSegmentationWidgetState
     return Wrap(
       spacing: 12,
       runSpacing: 6,
-      children: topClasses.map((entry) {
-        final classIdx = entry.$1;
-        final rgb = palette[classIdx % palette.length];
-        final color = Color.fromARGB(255, rgb[0], rgb[1], rgb[2]);
-        final label = (labels != null && classIdx < labels.length)
-            ? labels[classIdx]
-            : 'Class $classIdx';
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 16,
-              height: 16,
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(3),
-              ),
-            ),
-            const SizedBox(width: 4),
-            Text(label, style: const TextStyle(fontSize: 12)),
-          ],
-        );
-      }).toList(),
+      children:
+          topClasses.map((entry) {
+            final classIdx = entry.$1;
+            final rgb = palette[classIdx % palette.length];
+            final color = Color.fromARGB(255, rgb[0], rgb[1], rgb[2]);
+            final label =
+                (labels != null && classIdx < labels.length)
+                    ? labels[classIdx]
+                    : 'Class $classIdx';
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(label, style: const TextStyle(fontSize: 12)),
+              ],
+            );
+          }).toList(),
     );
   }
 

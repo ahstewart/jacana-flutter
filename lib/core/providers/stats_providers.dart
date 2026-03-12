@@ -4,6 +4,7 @@ import '../data_models/inference_stat.dart';
 import '../services/stats_service.dart';
 import '../services/telemetry_service.dart';
 import '../services/api_service.dart';
+import 'auth_providers.dart';
 
 // ---------------------------------------------------------------------------
 // StatsService — singleton for the app lifetime
@@ -68,3 +69,13 @@ final telemetryServiceProvider = Provider<TelemetryService>((ref) {
     apiService: ApiService(),
   );
 });
+
+// ---------------------------------------------------------------------------
+// Convenience: sync telemetry using current opt-in state and auth token
+// ---------------------------------------------------------------------------
+Future<void> syncTelemetry(Ref ref) {
+  final svc = ref.read(telemetryServiceProvider);
+  final optedIn = ref.read(telemetryOptInProvider);
+  final token = ref.read(authTokenProvider);
+  return svc.syncIfEligible(optedIn: optedIn, authToken: token);
+}

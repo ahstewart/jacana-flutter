@@ -205,8 +205,8 @@ class ModelVersion {
     this.unsupported_reason,
   });
 
-  /// True if this version has a runnable pipeline (validated or unverified).
-  bool get isUsable => status == 'supported' || status == 'unverified';
+  /// True if this version has a runnable pipeline (verified or pending verification).
+  bool get isUsable => status == 'supported' || status == 'pending';
 
   factory ModelVersion.fromJson(Map<String, dynamic> json) =>
       _$ModelVersionFromJson(json);

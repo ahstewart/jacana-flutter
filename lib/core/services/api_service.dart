@@ -1,5 +1,7 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../data_models/api_models.dart';
 import '../data_models/inference_stat.dart';
@@ -8,6 +10,9 @@ class ApiService {
   // TODO: Update this to your actual backend URL
   static const String baseUrl =
       'http://10.0.2.2:8000/api/v1'; // Change this to your backend URL
+
+  /// Timeout applied to all external calls — metadata and file downloads.
+  static const Duration _apiTimeout = Duration(seconds: 30);
 
   final http.Client _httpClient;
 
@@ -35,7 +40,7 @@ class ApiService {
         },
       );
 
-      final response = await _httpClient.get(uri);
+      final response = await _httpClient.get(uri).timeout(_apiTimeout);
 
       if (response.statusCode == 200) {
         final List<dynamic> jsonList = jsonDecode(response.body);
@@ -43,6 +48,10 @@ class ApiService {
       } else {
         throw Exception('Failed to load models: ${response.statusCode}');
       }
+    } on SocketException {
+      throw ApiConnectionException();
+    } on TimeoutException {
+      throw ApiTimeoutException();
     } catch (e) {
       debugPrint('Error in getModels: $e');
       rethrow;
@@ -52,15 +61,19 @@ class ApiService {
   /// Fetch a specific model by ID
   Future<MLModel> getModel(String modelId) async {
     try {
-      final response = await _httpClient.get(
-        Uri.parse('$baseUrl/models/$modelId'),
-      );
+      final response = await _httpClient
+          .get(Uri.parse('$baseUrl/models/$modelId'))
+          .timeout(_apiTimeout);
 
       if (response.statusCode == 200) {
         return MLModel.fromJson(jsonDecode(response.body));
       } else {
         throw Exception('Failed to load model: ${response.statusCode}');
       }
+    } on SocketException {
+      throw ApiConnectionException();
+    } on TimeoutException {
+      throw ApiTimeoutException();
     } catch (e) {
       debugPrint('Error in getModel: $e');
       rethrow;
@@ -74,9 +87,9 @@ class ApiService {
   /// Fetch all versions for a specific model
   Future<List<ModelVersion>> getModelVersions(String modelId) async {
     try {
-      final response = await _httpClient.get(
-        Uri.parse('$baseUrl/models/$modelId/versions'),
-      );
+      final response = await _httpClient
+          .get(Uri.parse('$baseUrl/models/$modelId/versions'))
+          .timeout(_apiTimeout);
 
       if (response.statusCode == 200) {
         final List<dynamic> jsonList = jsonDecode(response.body);
@@ -84,6 +97,10 @@ class ApiService {
       } else {
         throw Exception('Failed to load versions: ${response.statusCode}');
       }
+    } on SocketException {
+      throw ApiConnectionException();
+    } on TimeoutException {
+      throw ApiTimeoutException();
     } catch (e) {
       debugPrint('Error in getModelVersions: $e');
       rethrow;
@@ -93,15 +110,19 @@ class ApiService {
   /// Fetch a specific model version by ID
   Future<ModelVersion> getModelVersion(String versionId) async {
     try {
-      final response = await _httpClient.get(
-        Uri.parse('$baseUrl/versions/$versionId'),
-      );
+      final response = await _httpClient
+          .get(Uri.parse('$baseUrl/versions/$versionId'))
+          .timeout(_apiTimeout);
 
       if (response.statusCode == 200) {
         return ModelVersion.fromJson(jsonDecode(response.body));
       } else {
         throw Exception('Failed to load version: ${response.statusCode}');
       }
+    } on SocketException {
+      throw ApiConnectionException();
+    } on TimeoutException {
+      throw ApiTimeoutException();
     } catch (e) {
       debugPrint('Error in getModelVersion: $e');
       rethrow;
@@ -112,16 +133,21 @@ class ApiService {
   // UTILITY METHODS
   // ==========================================
 
-  /// Download file from URL and return bytes
+  /// Download file from URL and return bytes.
   Future<List<int>> downloadFile(String url) async {
     try {
-      final response = await _httpClient.get(Uri.parse(url));
+      final response =
+          await _httpClient.get(Uri.parse(url)).timeout(_apiTimeout);
 
       if (response.statusCode == 200) {
         return response.bodyBytes;
       } else {
         throw Exception('Failed to download file: ${response.statusCode}');
       }
+    } on SocketException {
+      throw ApiConnectionException();
+    } on TimeoutException {
+      throw ApiTimeoutException();
     } catch (e) {
       debugPrint('Error downloading file: $e');
       rethrow;
@@ -135,7 +161,7 @@ class ApiService {
   Future<List<int>> downloadAsset(String versionId, String assetKey) async {
     try {
       final uri = Uri.parse('$baseUrl/versions/$versionId/download/$assetKey');
-      final response = await _httpClient.get(uri);
+      final response = await _httpClient.get(uri).timeout(_apiTimeout);
 
       if (response.statusCode == 200) {
         return response.bodyBytes;
@@ -144,6 +170,10 @@ class ApiService {
           'Failed to download asset "$assetKey": ${response.statusCode}',
         );
       }
+    } on SocketException {
+      throw ApiConnectionException();
+    } on TimeoutException {
+      throw ApiTimeoutException();
     } catch (e) {
       debugPrint('Error downloading asset "$assetKey" for version $versionId: $e');
       rethrow;
@@ -161,17 +191,23 @@ class ApiService {
     required String authToken,
   }) async {
     try {
-      final response = await _httpClient.post(
-        Uri.parse('$baseUrl/telemetry/batch'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $authToken',
-        },
-        body: jsonEncode({'stats': stats.map((s) => s.toApiJson()).toList()}),
-      );
+      final response = await _httpClient
+          .post(
+            Uri.parse('$baseUrl/telemetry/batch'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $authToken',
+            },
+            body: jsonEncode({'stats': stats.map((s) => s.toApiJson()).toList()}),
+          )
+          .timeout(_apiTimeout);
       if (response.statusCode != 200 && response.statusCode != 201) {
         throw Exception('Telemetry upload failed: ${response.statusCode}');
       }
+    } on SocketException {
+      throw ApiConnectionException();
+    } on TimeoutException {
+      throw ApiTimeoutException();
     } catch (e) {
       debugPrint('Error uploading telemetry: $e');
       rethrow;
@@ -181,4 +217,19 @@ class ApiService {
   void dispose() {
     _httpClient.close();
   }
+}
+
+// ==========================================
+// TYPED CONNECTION EXCEPTIONS
+// ==========================================
+
+/// Thrown when the device cannot reach the backend at all (no route to host,
+/// connection refused, etc.).
+class ApiConnectionException implements Exception {
+  const ApiConnectionException();
+}
+
+/// Thrown when the backend is reachable but takes too long to respond.
+class ApiTimeoutException implements Exception {
+  const ApiTimeoutException();
 }

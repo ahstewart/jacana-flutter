@@ -1,5 +1,5 @@
-name: model_range
-description: "A new Flutter project."
+name: jacana
+description: "Jacana — edge AI model marketplace for mobile."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -53,6 +53,7 @@ dependencies:
   shared_preferences: ^2.3.2
   connectivity_plus: ^6.0.5
   device_info_plus: ^10.1.2
+  supabase_flutter: ^2.0.0
 
 dev_dependencies:
   build_runner: ^2.4.15
@@ -87,6 +88,8 @@ flutter:
     - assets/
     - assets/metadata/
     - assets/images/
+    - assets/images/logo.png
+    - assets/images/logo_with_name.png
     - assets/images/michael-sum-LEpfefQf4rU-unsplash.jpg
     - assets/mobilenetv4_conv_small.e2400_r224_in1k_float32.tflite
     - assets/imagenet_classes.txt

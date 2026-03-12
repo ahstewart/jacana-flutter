@@ -6,8 +6,9 @@ import 'dart:typed_data';
 extension ReshapeList on List {
   List reshape(List<int> newShape) {
     if (newShape.isEmpty) {
-      if (length == 1 && this[0] is List)
+      if (length == 1 && this[0] is List) {
         return this[0]; // Handle scalar tensor case
+      }
       if (length == 0) return [];
       throw ArgumentError(
         'New shape cannot be empty unless list contains a single element list (scalar tensor).',

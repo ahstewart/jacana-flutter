@@ -47,9 +47,9 @@ List<int> _inferShapeStatic(dynamic data) {
   final dims = <int>[];
   dynamic current = data;
   while (current is List) {
-    dims.add((current as List).length);
-    if ((current as List).isEmpty) break;
-    current = (current as List).first;
+    dims.add((current).length);
+    if ((current).isEmpty) break;
+    current = (current).first;
   }
   return dims;
 }
@@ -794,10 +794,11 @@ class InferenceService {
           );
         }
       default:
-        if (kDebugMode)
+        if (kDebugMode) {
           debugPrint(
             "InferenceService: Warning: Unknown postprocessing interpretation '$interpretation' for output '$outputName'. Wrapping as GenericDataResult.",
           );
+        }
         return GenericDataResult(currentResult);
     }
   }
@@ -829,7 +830,7 @@ class InferenceService {
                     actualShape[2] != targetWidth)) {
               debugPrint(
                 '[InferenceService] resize_image: pipeline size '
-                '${targetWidth}x${targetHeight} overridden by actual model '
+                '${targetWidth}x$targetHeight overridden by actual model '
                 'input shape ${actualShape[2]}x${actualShape[1]}.',
               );
             }
@@ -1284,11 +1285,7 @@ class InferenceService {
     }
   }
 
-  void _recordStat(
-    int ms,
-    bool success,
-    Map<String, InferenceResult> results,
-  ) {
+  void _recordStat(int ms, bool success, Map<String, InferenceResult> results) {
     double? topConfidence;
     int? numResults;
     for (final result in results.values) {
@@ -1301,8 +1298,9 @@ class InferenceService {
         final all = result.results.values.expand((v) => v).toList();
         numResults = all.length;
         if (all.isNotEmpty) {
-          final confs =
-              all.map((d) => (d['confidence'] as num? ?? 0).toDouble());
+          final confs = all.map(
+            (d) => (d['confidence'] as num? ?? 0).toDouble(),
+          );
           topConfidence = confs.reduce((a, b) => a + b) / confs.length;
         }
         break;
@@ -1681,9 +1679,9 @@ class InferenceService {
     final dims = <int>[];
     dynamic current = data;
     while (current is List) {
-      dims.add((current as List).length);
-      if ((current as List).isEmpty) break;
-      current = (current as List).first;
+      dims.add((current).length);
+      if ((current).isEmpty) break;
+      current = (current).first;
     }
     return dims;
   }

@@ -1,4 +1,4 @@
-package com.example.model_range
+package com.example.jacana
 
 import io.flutter.embedding.android.FlutterActivity
 

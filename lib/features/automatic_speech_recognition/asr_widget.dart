@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -175,8 +174,11 @@ class _AutomaticSpeechRecognitionWidgetState
       } else if (firstResult is ErrorResult) {
         setState(() => _errorMessage = firstResult.errorMessage);
       } else if (firstResult != null) {
-        setState(() =>
-            _errorMessage = 'Unexpected result type: ${firstResult.runtimeType}');
+        setState(
+          () =>
+              _errorMessage =
+                  'Unexpected result type: ${firstResult.runtimeType}',
+        );
       } else {
         setState(() => _errorMessage = 'No output produced.');
       }
@@ -188,10 +190,13 @@ class _AutomaticSpeechRecognitionWidgetState
       _inferenceTimer?.cancel();
       _inferenceTimer = null;
       if (widget.modelVersionId != null) {
-        ref.read(telemetryServiceProvider).syncIfEligible(
-          optedIn: ref.read(telemetryOptInProvider),
-          authToken: null,
-        ).ignore();
+        ref
+            .read(telemetryServiceProvider)
+            .syncIfEligible(
+              optedIn: ref.read(telemetryOptInProvider),
+              authToken: null,
+            )
+            .ignore();
       }
       setState(() => _isRunning = false);
     }
@@ -256,9 +261,8 @@ class _AutomaticSpeechRecognitionWidgetState
                   Icon(
                     _isRecording ? Icons.mic : Icons.mic_none,
                     size: 80,
-                    color: _isRecording
-                        ? colorScheme.error
-                        : colorScheme.primary,
+                    color:
+                        _isRecording ? colorScheme.error : colorScheme.primary,
                   ),
                   const SizedBox(height: 32),
                   // Record / Stop + Upload buttons
@@ -266,27 +270,32 @@ class _AutomaticSpeechRecognitionWidgetState
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       ElevatedButton.icon(
-                        icon: Icon(_isRecording
-                            ? Icons.stop
-                            : Icons.fiber_manual_record),
+                        icon: Icon(
+                          _isRecording ? Icons.stop : Icons.fiber_manual_record,
+                        ),
                         label: Text(_isRecording ? 'Stop' : 'Record'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: _isRecording
-                              ? colorScheme.error
-                              : colorScheme.primary,
+                          backgroundColor:
+                              _isRecording
+                                  ? colorScheme.error
+                                  : colorScheme.primary,
                           foregroundColor: colorScheme.onPrimary,
                         ),
-                        onPressed: _isRunning
-                            ? null
-                            : (_isRecording ? _stopRecording : _startRecording),
+                        onPressed:
+                            _isRunning
+                                ? null
+                                : (_isRecording
+                                    ? _stopRecording
+                                    : _startRecording),
                       ),
                       const SizedBox(width: 16),
                       OutlinedButton.icon(
                         icon: const Icon(Icons.folder_open),
                         label: const Text('Upload'),
-                        onPressed: (_isRunning || _isRecording)
-                            ? null
-                            : _pickAudioFile,
+                        onPressed:
+                            (_isRunning || _isRecording)
+                                ? null
+                                : _pickAudioFile,
                       ),
                     ],
                   ),

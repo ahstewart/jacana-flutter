@@ -1,11 +1,8 @@
-import 'dart:convert'; // For jsonEncode/Decode if used for YamlMap conversion
-import 'dart:typed_data';
-import 'package:flutter/material.dart'; // For kDebugMode, Color
-import 'package:flutter/services.dart' show rootBundle;
+// For jsonEncode/Decode if used for YamlMap conversion
+// For kDebugMode, Color
 import 'package:image/image.dart' as img;
-import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:flutter/foundation.dart'; // For kDebugMode
-import 'package:yaml/yaml.dart'; // For YAML parsing
+// For YAML parsing
 import 'dart:developer' as developer; // For inspect
 
 sealed class InferenceResult extends Object {
@@ -38,10 +35,11 @@ class TextResult extends InferenceResult {
 }
 
 class SegmentationResult extends InferenceResult {
-  final img.Image mask;           // colorized segmentation mask at model resolution
+  final img.Image mask; // colorized segmentation mask at model resolution
   final int numClasses;
-  final List<List<int>> palette;  // RGB palette used to colorize (needed for legend)
-  final List<String>? labels;     // optional class names, one per class index
+  final List<List<int>>
+  palette; // RGB palette used to colorize (needed for legend)
+  final List<String>? labels; // optional class names, one per class index
 
   SegmentationResult({
     required this.mask,

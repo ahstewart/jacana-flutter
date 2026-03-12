@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -34,7 +33,11 @@ class DeviceInfoHelper {
   static String get cachedDeviceModel => _cachedModel;
 
   static String get currentPlatform =>
-      Platform.isAndroid ? 'android' : Platform.isIOS ? 'ios' : 'unknown';
+      Platform.isAndroid
+          ? 'android'
+          : Platform.isIOS
+          ? 'ios'
+          : 'unknown';
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +57,8 @@ class StatsService {
     _db = await openDatabase(
       dbPath,
       version: _version,
-      onCreate: (db, version) => db.execute('''
+      onCreate:
+          (db, version) => db.execute('''
         CREATE TABLE $_table (
           id              INTEGER PRIMARY KEY AUTOINCREMENT,
           model_version_id TEXT NOT NULL,
@@ -120,7 +124,8 @@ class StatsService {
 
   Future<InferenceStatSummary?> getSummaryForVersion(String versionId) async {
     final db = await _getDb();
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT
         COUNT(*)                        AS total_runs,
         SUM(success)                    AS successful_runs,
@@ -129,7 +134,9 @@ class StatsService {
         MAX(timestamp)                  AS last_run_at
       FROM $_table
       WHERE model_version_id = ?
-    ''', [versionId]);
+    ''',
+      [versionId],
+    );
 
     if (rows.isEmpty) return null;
     final row = rows.first;
@@ -142,16 +149,19 @@ class StatsService {
       successfulRuns: (row['successful_runs'] as int?) ?? 0,
       avgLatencyMs: (row['avg_latency_ms'] as double?) ?? 0,
       avgConfidence: row['avg_confidence'] as double?,
-      lastRunAt: row['last_run_at'] != null
-          ? DateTime.tryParse(row['last_run_at'] as String)
-          : null,
+      lastRunAt:
+          row['last_run_at'] != null
+              ? DateTime.tryParse(row['last_run_at'] as String)
+              : null,
     );
   }
 
   // ── Housekeeping ──────────────────────────────────────────────────────────
 
   /// Deletes all synced records older than [maxAge] to keep the DB lean.
-  Future<void> pruneOldSynced({Duration maxAge = const Duration(days: 30)}) async {
+  Future<void> pruneOldSynced({
+    Duration maxAge = const Duration(days: 30),
+  }) async {
     final db = await _getDb();
     final cutoff = DateTime.now().subtract(maxAge).toIso8601String();
     await db.delete(

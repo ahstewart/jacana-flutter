@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 //import 'package:freezed_annotation/freezed_annotation.dart';
@@ -18,9 +19,13 @@ import 'features/text_generation/text_generation.dart';
 import 'features/semantic_segmentation/semantic_segmentation.dart';
 import 'features/automatic_speech_recognition/asr_widget.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'core/services/stats_service.dart';
 import 'core/providers/stats_providers.dart';
 import 'core/data_models/inference_stat.dart';
+import 'core/providers/auth_providers.dart';
+import 'core/services/api_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 // Returns free bytes available on the filesystem containing [dirPath], or null on failure.
 Future<int?> _getFreeDiskBytes(String dirPath) async {
@@ -40,14 +45,26 @@ String _formatBytes(int bytes) {
   if (bytes >= 1024 * 1024 * 1024) {
     return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(1)} GB';
   }
-  if (bytes >= 1024 * 1024)
+  if (bytes >= 1024 * 1024) {
     return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+  }
   if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
   return '$bytes B';
 }
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // TODO: Replace with your Supabase project URL and anon key.
+  // For local development with `supabase start`, the URL is typically
+  // http://10.0.2.2:54321 (Android emulator) and the anon key is printed
+  // by `supabase status`. For production, use your project's values from
+  // the Supabase dashboard (Settings → API).
+  await Supabase.initialize(
+    url: 'http://10.0.2.2:54321',
+    anonKey: 'YOUR_SUPABASE_ANON_KEY',
+  );
+
   await DeviceInfoHelper.init();
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details); // Still show red screen in debug
@@ -73,124 +90,153 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Pocket AI',
+      title: 'Jacana',
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: const ColorScheme.light(
-          primary: Color(0xFF0284C7),
+          // Primary: Chestnut Brown
+          primary: Color(0xFF8C3A21),
           onPrimary: Colors.white,
-          primaryContainer: Color(0xFFE0F2FE),
-          onPrimaryContainer: Color(0xFF0C4A6E),
-          secondary: Color(0xFF7C3AED),
-          onSecondary: Colors.white,
-          secondaryContainer: Color(0xFFEDE9FE),
-          onSecondaryContainer: Color(0xFF4C1D95),
+          primaryContainer: Color(0xFFFAE5D8),
+          onPrimaryContainer: Color(0xFF3F190D),
+          // Secondary: Golden Amber
+          secondary: Color(0xFFE5A91A),
+          onSecondary: Color(0xFF1A1A1A),
+          secondaryContainer: Color(0xFFFEF0C3),
+          onSecondaryContainer: Color(0xFF4F3A07),
+          // Surfaces
           surface: Colors.white,
-          onSurface: Color(0xFF0F172A),
-          surfaceContainerHighest: Color(0xFFF1F5F9),
-          onSurfaceVariant: Color(0xFF475569),
-          outline: Color(0xFFE2E8F0),
+          onSurface: Color(0xFF1A1A1A),
+          surfaceContainerHighest: Color(0xFFF5F5F5),
+          // Accent: Slate Blue for secondary text / inactive
+          onSurfaceVariant: Color(0xFF526870),
+          // Borders
+          outline: Color(0xFFC5D3D8),
           error: Color(0xFFDC2626),
           onError: Colors.white,
         ),
-        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+        scaffoldBackgroundColor: const Color(0xFFF5F5F5),
         cardTheme: CardThemeData(
           elevation: 0,
           color: Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
-            side: const BorderSide(color: Color(0xFFE2E8F0)),
+            side: const BorderSide(color: Color(0xFFC5D3D8)),
           ),
           margin: EdgeInsets.zero,
         ),
         appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.white,
-          foregroundColor: Color(0xFF0F172A),
+          backgroundColor: Color(0xFF8C3A21),
+          foregroundColor: Colors.white,
           elevation: 0,
           scrolledUnderElevation: 1,
           shadowColor: Color(0x1A000000),
           titleTextStyle: TextStyle(
-            color: Color(0xFF0F172A),
+            color: Colors.white,
             fontSize: 18,
             fontWeight: FontWeight.w700,
           ),
         ),
         navigationBarTheme: NavigationBarThemeData(
           backgroundColor: Colors.white,
-          indicatorColor: const Color(0xFFE0F2FE),
+          indicatorColor: const Color(0xFFFAE5D8),
           elevation: 0,
           shadowColor: Colors.transparent,
           surfaceTintColor: Colors.transparent,
           iconTheme: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.selected)) {
-              return const IconThemeData(color: Color(0xFF0284C7));
+              return const IconThemeData(color: Color(0xFF8C3A21));
             }
-            return const IconThemeData(color: Color(0xFF64748B));
+            return const IconThemeData(color: Color(0xFF829CA5));
           }),
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.selected)) {
               return const TextStyle(
-                color: Color(0xFF0284C7),
+                color: Color(0xFF8C3A21),
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               );
             }
-            return const TextStyle(color: Color(0xFF64748B), fontSize: 12);
+            return const TextStyle(color: Color(0xFF829CA5), fontSize: 12);
           }),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF0284C7),
+            backgroundColor: const Color(0xFF8C3A21),
             foregroundColor: Colors.white,
             elevation: 0,
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: OutlinedButton.styleFrom(
-            foregroundColor: const Color(0xFF0284C7),
-            side: const BorderSide(color: Color(0xFF0284C7)),
+            foregroundColor: const Color(0xFF8C3A21),
+            side: const BorderSide(color: Color(0xFF8C3A21)),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            textStyle: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
         textButtonTheme: TextButtonThemeData(
-          style: TextButton.styleFrom(foregroundColor: const Color(0xFF0284C7)),
+          style: TextButton.styleFrom(foregroundColor: const Color(0xFF8C3A21)),
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.white,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+            borderSide: const BorderSide(color: Color(0xFFC5D3D8)),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+            borderSide: const BorderSide(color: Color(0xFFC5D3D8)),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: Color(0xFF0284C7), width: 2),
+            borderSide: const BorderSide(color: Color(0xFF8C3A21), width: 2),
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 10,
+          ),
         ),
         chipTheme: ChipThemeData(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
           labelPadding: const EdgeInsets.symmetric(horizontal: 2),
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
         ),
-        dividerTheme: const DividerThemeData(color: Color(0xFFE2E8F0), thickness: 1),
+        dividerTheme: const DividerThemeData(
+          color: Color(0xFFC5D3D8),
+          thickness: 1,
+        ),
         switchTheme: SwitchThemeData(
-          thumbColor: WidgetStateProperty.resolveWith((states) =>
-              states.contains(WidgetState.selected) ? const Color(0xFF0284C7) : null),
-          trackColor: WidgetStateProperty.resolveWith((states) =>
-              states.contains(WidgetState.selected) ? const Color(0xFFBAE6FD) : null),
+          thumbColor: WidgetStateProperty.resolveWith(
+            (states) =>
+                states.contains(WidgetState.selected)
+                    ? const Color(0xFF8C3A21)
+                    : null,
+          ),
+          trackColor: WidgetStateProperty.resolveWith(
+            (states) =>
+                states.contains(WidgetState.selected)
+                    ? const Color(0xFFFCE08A)
+                    : null,
+          ),
         ),
       ),
-      home: const ModelList(title: 'Pocket AI'),
+      home: const ModelList(title: 'Jacana'),
     );
   }
 }
@@ -261,23 +307,40 @@ final downloadedModelsProvider =
     );
 
 class DownloadedModelsNotifier extends StateNotifier<List<DownloadedModel>> {
+  static const _prefsKey = 'downloaded_models_v1';
+
   DownloadedModelsNotifier() : super([]) {
     _loadDownloadedModels();
   }
 
   Future<void> _loadDownloadedModels() async {
-    // TODO: Load downloaded models from local storage (SharedPreferences or local JSON file)
-    // For now, starting with empty list
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsKey);
+      if (raw == null) return;
+      final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+      if (mounted) state = list.map(DownloadedModel.fromJson).toList();
+    } catch (_) {}
+  }
+
+  Future<void> _persist() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _prefsKey,
+        jsonEncode(state.map((m) => m.toJson()).toList()),
+      );
+    } catch (_) {}
   }
 
   void addDownloadedModel(DownloadedModel model) {
     state = [...state, model];
-    // TODO: Save updated list to local storage
+    _persist();
   }
 
   void removeDownloadedModel(String versionId) {
     state = state.where((m) => m.versionId != versionId).toList();
-    // TODO: Save updated list to local storage
+    _persist();
   }
 }
 
@@ -342,8 +405,11 @@ IconData _taskIcon(String task) {
   if (task.contains('classif')) return Icons.image_search;
   if (task.contains('detect')) return Icons.center_focus_strong;
   if (task.contains('segment')) return Icons.blur_circular;
-  if (task.contains('text') || task.contains('generat')) return Icons.text_fields;
-  if (task.contains('speech') || task.contains('audio') || task.contains('asr')) {
+  if (task.contains('text') || task.contains('generat'))
+    return Icons.text_fields;
+  if (task.contains('speech') ||
+      task.contains('audio') ||
+      task.contains('asr')) {
     return Icons.mic;
   }
   return Icons.memory;
@@ -469,10 +535,9 @@ class _ModelsState extends ConsumerState<Models> {
               child: Row(
                 children: [
                   Expanded(
-                    child: SizedBox(
-                      height: 40,
-                      child: ListView(
-                        scrollDirection: Axis.horizontal,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
                         children: [
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -529,10 +594,9 @@ class _ModelsState extends ConsumerState<Models> {
             if (tasks.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-                child: SizedBox(
-                  height: 40,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
                     children: [
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -583,7 +647,10 @@ class _ModelsState extends ConsumerState<Models> {
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (err, stack) => Center(child: Text('Error loading models: $err')),
+      error: (err, stack) => _ApiErrorWidget(
+        err: err,
+        onRetry: () => ref.invalidate(supportedModelsProvider),
+      ),
     );
   }
 
@@ -591,6 +658,64 @@ class _ModelsState extends ConsumerState<Models> {
     showDialog(
       context: context,
       builder: (context) => ModelDetailsModal(model: model),
+    );
+  }
+}
+
+// ── API error widget ────────────────────────────────────────────────────────
+
+class _ApiErrorWidget extends StatelessWidget {
+  const _ApiErrorWidget({required this.err, required this.onRetry});
+
+  final Object err;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    final bool isOffline = err is ApiConnectionException ||
+        err is ApiTimeoutException ||
+        err.toString().toLowerCase().contains('socket') ||
+        err.toString().toLowerCase().contains('connection refused');
+
+    final String message = switch (err) {
+      ApiConnectionException() =>
+        "Couldn't reach the Jacana server.\nMake sure the backend is running and try again.",
+      ApiTimeoutException() =>
+        'The server took too long to respond.\nCheck your connection and try again.',
+      _ when isOffline =>
+        "Couldn't connect to the server.\nCheck your connection and try again.",
+      _ => 'Something went wrong loading models.\nPlease try again.',
+    };
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isOffline ? Icons.cloud_off_outlined : Icons.error_outline,
+              size: 56,
+              color: cs.outline,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 24),
+            FilledButton.tonal(
+              onPressed: onRetry,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -605,9 +730,10 @@ class _ModelCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final taskLabel = model.task != null && model.task!.isNotEmpty
-        ? _friendlyTask(model.task!)
-        : _friendlyTask(model.category);
+    final taskLabel =
+        model.task != null && model.task!.isNotEmpty
+            ? _friendlyTask(model.task!)
+            : _friendlyTask(model.category);
     final icon = _taskIcon((model.task ?? model.category).toLowerCase());
 
     return Card(
@@ -650,7 +776,9 @@ class _ModelCard extends StatelessWidget {
                         const SizedBox(width: 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
                           decoration: BoxDecoration(
                             color: cs.secondaryContainer,
                             borderRadius: BorderRadius.circular(4),
@@ -669,31 +797,40 @@ class _ModelCard extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       model.description,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Icon(Icons.download_outlined,
-                            size: 12, color: cs.onSurfaceVariant),
+                        Icon(
+                          Icons.download_outlined,
+                          size: 12,
+                          color: cs.onSurfaceVariant,
+                        ),
                         const SizedBox(width: 3),
                         Text(
                           _formatCount(model.total_download_count),
-                          style: theme.textTheme.labelSmall
-                              ?.copyWith(color: cs.onSurfaceVariant),
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
                         ),
                         if (model.total_ratings > 0) ...[
                           const SizedBox(width: 10),
-                          Icon(Icons.star_rounded,
-                              size: 12, color: Colors.amber[700]),
+                          Icon(
+                            Icons.star_rounded,
+                            size: 12,
+                            color: Colors.amber[700],
+                          ),
                           const SizedBox(width: 3),
                           Text(
                             model.rating_weighted_avg.toStringAsFixed(1),
-                            style: theme.textTheme.labelSmall
-                                ?.copyWith(color: cs.onSurfaceVariant),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
                           ),
                         ],
                       ],
@@ -977,10 +1114,14 @@ class _VersionTileState extends ConsumerState<_VersionTile> {
                   isDownloaded
                       ? ElevatedButton.icon(
                         onPressed: () {
-                          ref
-                              .read(selectedModelVersionProvider.notifier)
-                              .setVersion(widget.version);
-                          Navigator.pop(context);
+                          final dm = ref
+                              .read(downloadedModelsProvider)
+                              .firstWhere(
+                                (m) => m.versionId == widget.version.id,
+                              );
+                          final nav = Navigator.of(context);
+                          nav.pop(); // close dialog
+                          _launchInference(nav.context, dm);
                         },
                         icon: const Icon(Icons.play_arrow),
                         label: const Text('Run'),
@@ -1104,23 +1245,45 @@ class _VersionTileState extends ConsumerState<_VersionTile> {
           duration: const Duration(seconds: 3),
         ),
       );
+    } on ApiConnectionException catch (_, stack) {
+      debugPrint('[Download] Connection error\n$stack');
+      inProgressNotifier.finishDownload(version.id);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Couldn't reach the server. Check your connection and try again.",
+          ),
+          duration: Duration(seconds: 5),
+        ),
+      );
+    } on ApiTimeoutException catch (_, stack) {
+      debugPrint('[Download] Timeout\n$stack');
+      inProgressNotifier.finishDownload(version.id);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Download timed out. Check your connection and try again.',
+          ),
+          duration: Duration(seconds: 5),
+        ),
+      );
     } catch (e, stack) {
       debugPrint('[Download] Error: $e');
       debugPrint('[Download] Stack: $stack');
       inProgressNotifier.finishDownload(version.id);
       messenger.showSnackBar(
-        SnackBar(
-          content: Text('Download failed: $e'),
-          duration: const Duration(seconds: 4),
+        const SnackBar(
+          content: Text('Download failed. Please try again.'),
+          duration: Duration(seconds: 4),
         ),
       );
     }
   }
 }
 
-// widget for the model range
-class ModelRange extends ConsumerWidget {
-  const ModelRange({super.key});
+// widget for the Range tab
+class RangeTab extends ConsumerWidget {
+  const RangeTab({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1437,16 +1600,18 @@ class _StorageConfirmDialogState extends State<_StorageConfirmDialog> {
     try {
       final appDir = await getApplicationDocumentsDirectory();
       final free = await _getFreeDiskBytes(appDir.path);
-      if (mounted)
+      if (mounted) {
         setState(() {
           _freeBytes = free;
           _loadingSpace = false;
         });
+      }
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _loadingSpace = false;
         });
+      }
     }
   }
 
@@ -1651,6 +1816,7 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
   String _searchQuery = '';
   String? _selectedTask;
   String? _selectedCategory;
+  int _viewIndex = 0; // 0 = models, 1 = stats
 
   @override
   void dispose() {
@@ -1658,11 +1824,64 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
     super.dispose();
   }
 
+  void _invalidateStats() {
+    final models = ref.read(downloadedModelsProvider);
+    for (final m in models) {
+      ref.invalidate(versionStatSummaryProvider(m.versionId));
+      ref.invalidate(versionStatsProvider(m.versionId));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final downloadedModels = ref.watch(downloadedModelsProvider);
     final inProgress = ref.watch(inProgressDownloadsProvider);
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
 
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── View toggle ──────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(
+                value: 0,
+                label: Text('My Models'),
+                icon: Icon(Icons.cloud_download_outlined),
+              ),
+              ButtonSegment(
+                value: 1,
+                label: Text('Stats'),
+                icon: Icon(Icons.bar_chart_outlined),
+              ),
+            ],
+            selected: {_viewIndex},
+            onSelectionChanged: (s) {
+              setState(() => _viewIndex = s.first);
+              if (s.first == 1) _invalidateStats();
+            },
+          ),
+        ),
+        // ── View content ─────────────────────────────────────────────────────
+        Expanded(
+          child:
+              _viewIndex == 0
+                  ? _buildModelsView(context, downloadedModels, inProgress, cs)
+                  : _buildStatsView(context, downloadedModels, theme, cs),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildModelsView(
+    BuildContext context,
+    List<DownloadedModel> downloadedModels,
+    Map<String, InProgressDownload> inProgress,
+    ColorScheme cs,
+  ) {
     if (downloadedModels.isEmpty && inProgress.isEmpty) {
       return Center(
         child: Column(
@@ -1756,10 +1975,9 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
         if (tasks.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-            child: SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
                 children: [
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -1789,10 +2007,9 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
         if (categories.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-            child: SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
                 children: [
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -1825,9 +2042,9 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
           child: Text(
             'My AI ($totalCount)',
             style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: const Color(0xFF475569),
-                  fontWeight: FontWeight.w600,
-                ),
+              color: const Color(0xFF526870),
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
         // Scrollable content
@@ -1844,18 +2061,23 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                     child: Card(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
                         child: Row(
                           children: [
                             Container(
                               width: 42,
                               height: 42,
                               decoration: BoxDecoration(
-                                color: const Color(0xFFE0F2FE),
+                                color: const Color(0xFFFAE5D8),
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              child: const Icon(Icons.downloading,
-                                  color: Color(0xFF0284C7), size: 22),
+                              child: const Icon(
+                                Icons.downloading,
+                                color: Color(0xFF8C3A21),
+                                size: 22,
+                              ),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -1874,11 +2096,11 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                                   const SizedBox(height: 2),
                                   Text(
                                     'v${download.versionName} · ${(download.progress * 100).toInt()}%',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(
-                                            color: const Color(0xFF475569)),
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall?.copyWith(
+                                      color: const Color(0xFF526870),
+                                    ),
                                   ),
                                   const SizedBox(height: 6),
                                   LinearProgressIndicator(
@@ -1906,24 +2128,28 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                       child: Card(
                         clipBehavior: Clip.antiAlias,
                         child: InkWell(
-                          onTap: () => _runModel(context, model),
+                          onTap: () => _launchInference(context, model),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 10),
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
                             child: Row(
                               children: [
                                 Container(
                                   width: 42,
                                   height: 42,
                                   decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primaryContainer,
+                                    color:
+                                        Theme.of(
+                                          context,
+                                        ).colorScheme.primaryContainer,
                                     borderRadius: BorderRadius.circular(10),
                                   ),
                                   child: Icon(
                                     _taskIcon(model.category.toLowerCase()),
-                                    color: Theme.of(context).colorScheme.primary,
+                                    color:
+                                        Theme.of(context).colorScheme.primary,
                                     size: 22,
                                   ),
                                 ),
@@ -1938,12 +2164,11 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                                           Expanded(
                                             child: Text(
                                               model.modelName,
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodyMedium
-                                                  ?.copyWith(
-                                                      fontWeight:
-                                                          FontWeight.w600),
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.bodyMedium?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                              ),
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
                                             ),
@@ -1953,12 +2178,14 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                                             Container(
                                               padding:
                                                   const EdgeInsets.symmetric(
-                                                      horizontal: 6,
-                                                      vertical: 2),
+                                                    horizontal: 6,
+                                                    vertical: 2,
+                                                  ),
                                               decoration: BoxDecoration(
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .secondaryContainer,
+                                                color:
+                                                    Theme.of(context)
+                                                        .colorScheme
+                                                        .secondaryContainer,
                                                 borderRadius:
                                                     BorderRadius.circular(4),
                                               ),
@@ -1967,9 +2194,10 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                                                 style: TextStyle(
                                                   fontSize: 10,
                                                   fontWeight: FontWeight.w600,
-                                                  color: Theme.of(context)
-                                                      .colorScheme
-                                                      .onSecondaryContainer,
+                                                  color:
+                                                      Theme.of(context)
+                                                          .colorScheme
+                                                          .onSecondaryContainer,
                                                 ),
                                               ),
                                             ),
@@ -1978,30 +2206,34 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
                                       const SizedBox(height: 2),
                                       Text(
                                         'v${model.versionName}',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(
-                                                color: const Color(0xFF475569)),
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall?.copyWith(
+                                          color: const Color(0xFF526870),
+                                        ),
                                       ),
                                       _VersionStatRow(
-                                          versionId: model.versionId),
+                                        versionId: model.versionId,
+                                      ),
                                     ],
                                   ),
                                 ),
                                 const SizedBox(width: 4),
                                 IconButton(
-                                  icon: const Icon(Icons.delete_outline,
-                                      size: 20),
-                                  color: const Color(0xFF94A3B8),
+                                  icon: const Icon(
+                                    Icons.delete_outline,
+                                    size: 20,
+                                  ),
+                                  color: const Color(0xFF829CA5),
                                   onPressed: () {
                                     ref
                                         .read(downloadedModelsProvider.notifier)
                                         .removeDownloadedModel(model.versionId);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
-                                        content:
-                                            Text('Model removed successfully'),
+                                        content: Text(
+                                          'Model removed successfully',
+                                        ),
                                         duration: Duration(seconds: 2),
                                       ),
                                     );
@@ -2022,191 +2254,540 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
     );
   }
 
-  void _runModel(BuildContext context, DownloadedModel model) {
-    final tflitePath = '${model.localPath}/tflite';
-    final pipelinePath = '${model.localPath}/pipeline_spec.json';
-
-    Widget? inferenceWidget;
-    switch (model.category) {
-      case 'image_classification':
-      case 'image-classification':
-        inferenceWidget = ImageClassificationWidget(
-          modelName: tflitePath,
-          pipelinePath: pipelinePath,
-          isLocalFile: true,
-          localDir: model.localPath,
-          modelVersionId: model.versionId,
-          modelDisplayName: model.modelName,
-        );
-      case 'object_detection':
-      case 'object-detection':
-        inferenceWidget = ObjectDetectionWidget(
-          modelName: tflitePath,
-          pipelinePath: pipelinePath,
-          isLocalFile: true,
-          localDir: model.localPath,
-          modelVersionId: model.versionId,
-          modelDisplayName: model.modelName,
-        );
-      case 'text_generation':
-      case 'text-generation':
-        inferenceWidget = TextGenerationWidget(
-          modelName: tflitePath,
-          pipelinePath: pipelinePath,
-          isLocalFile: true,
-          localDir: model.localPath,
-          modelVersionId: model.versionId,
-          modelDisplayName: model.modelName,
-        );
-      case 'semantic_segmentation':
-      case 'image_segmentation':
-      case 'image-segmentation':
-      case 'semantic-segmentation':
-      case 'segmentation':
-        inferenceWidget = SemanticSegmentationWidget(
-          modelName: tflitePath,
-          pipelinePath: pipelinePath,
-          isLocalFile: true,
-          localDir: model.localPath,
-          modelVersionId: model.versionId,
-          modelDisplayName: model.modelName,
-        );
-      case 'automatic_speech_recognition':
-      case 'automatic-speech-recognition':
-        inferenceWidget = AutomaticSpeechRecognitionWidget(
-          modelName: tflitePath,
-          pipelinePath: pipelinePath,
-          isLocalFile: true,
-          localDir: model.localPath,
-          modelVersionId: model.versionId,
-          modelDisplayName: model.modelName,
-        );
-      default:
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Task type "${model.category}" is not yet supported for on-device inference.',
-            ),
-          ),
-        );
-        return;
-    }
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => inferenceWidget!),
-    );
-  }
-}
-
-// widget for the user
-class Profile extends ConsumerStatefulWidget {
-  const Profile({super.key});
-
-  @override
-  ConsumerState<Profile> createState() => _ProfileState();
-}
-
-class _ProfileState extends ConsumerState<Profile> {
-  @override
-  void initState() {
-    super.initState();
-    // Invalidate cached stats so they're fresh when the tab is opened.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _invalidateStats());
-  }
-
-  void _invalidateStats() {
-    final models = ref.read(downloadedModelsProvider);
-    for (final m in models) {
-      ref.invalidate(versionStatSummaryProvider(m.versionId));
-      ref.invalidate(versionStatsProvider(m.versionId));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final optedIn = ref.watch(telemetryOptInProvider);
-    final downloadedModels = ref.watch(downloadedModelsProvider);
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
+  Widget _buildStatsView(
+    BuildContext context,
+    List<DownloadedModel> downloadedModels,
+    ThemeData theme,
+    ColorScheme cs,
+  ) {
     return RefreshIndicator(
       onRefresh: () async => _invalidateStats(),
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         children: [
-          const SizedBox(height: 8),
-          Text('Profile', style: theme.textTheme.headlineSmall),
-          const SizedBox(height: 24),
-
-          // ── Privacy ────────────────────────────────────────────────────────
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Privacy', style: theme.textTheme.titleMedium),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Inference stats are always stored locally on your device. '
-                    'Enable below to share them anonymously — requires signing in to your Pocket AI account.',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: cs.onSurfaceVariant),
-                  ),
-                  const SizedBox(height: 8),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Share inference telemetry'),
-                    subtitle: const Text(
-                      'Latency, accuracy metrics, and device model — no personal data.',
-                    ),
-                    value: optedIn,
-                    onChanged: (v) =>
-                        ref.read(telemetryOptInProvider.notifier).setValue(v),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-
-          // ── Inference Stats ────────────────────────────────────────────────
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Inference Stats', style: theme.textTheme.titleMedium),
+              Text(
+                'Inference Stats',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: const Color(0xFF526870),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               IconButton(
                 icon: const Icon(Icons.refresh, size: 20),
-                tooltip: 'Refresh stats',
+                tooltip: 'Refresh',
                 onPressed: _invalidateStats,
               ),
             ],
           ),
-          const SizedBox(height: 8),
-
+          const SizedBox(height: 4),
           if (downloadedModels.isEmpty)
             Card(
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 40,
+                  horizontal: 16,
+                ),
                 child: Center(
-                  child: Text(
-                    'Download models from the Home tab to see inference stats here.',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: cs.onSurfaceVariant),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.bar_chart_outlined,
+                        size: 48,
+                        color: Colors.grey[400],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'No inference stats yet',
+                        style: theme.textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Download and run models to see stats here.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
                   ),
                 ),
               ),
             )
           else
             ...downloadedModels.map(
-              (model) => _ModelStatCard(model: model),
+              (model) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _ModelStatCard(model: model),
+              ),
             ),
-
-          const SizedBox(height: 32),
         ],
       ),
+    );
+  }
+}
+
+void _launchInference(BuildContext context, DownloadedModel model) {
+  final tflitePath = '${model.localPath}/tflite';
+  final pipelinePath = '${model.localPath}/pipeline_spec.json';
+
+  Widget? inferenceWidget;
+  switch (model.category) {
+    case 'image_classification':
+    case 'image-classification':
+      inferenceWidget = ImageClassificationWidget(
+        modelName: tflitePath,
+        pipelinePath: pipelinePath,
+        isLocalFile: true,
+        localDir: model.localPath,
+        modelVersionId: model.versionId,
+        modelDisplayName: model.modelName,
+      );
+    case 'object_detection':
+    case 'object-detection':
+      inferenceWidget = ObjectDetectionWidget(
+        modelName: tflitePath,
+        pipelinePath: pipelinePath,
+        isLocalFile: true,
+        localDir: model.localPath,
+        modelVersionId: model.versionId,
+        modelDisplayName: model.modelName,
+      );
+    case 'text_generation':
+    case 'text-generation':
+      inferenceWidget = TextGenerationWidget(
+        modelName: tflitePath,
+        pipelinePath: pipelinePath,
+        isLocalFile: true,
+        localDir: model.localPath,
+        modelVersionId: model.versionId,
+        modelDisplayName: model.modelName,
+      );
+    case 'semantic_segmentation':
+    case 'image_segmentation':
+    case 'image-segmentation':
+    case 'semantic-segmentation':
+    case 'segmentation':
+      inferenceWidget = SemanticSegmentationWidget(
+        modelName: tflitePath,
+        pipelinePath: pipelinePath,
+        isLocalFile: true,
+        localDir: model.localPath,
+        modelVersionId: model.versionId,
+        modelDisplayName: model.modelName,
+      );
+    case 'automatic_speech_recognition':
+    case 'automatic-speech-recognition':
+      inferenceWidget = AutomaticSpeechRecognitionWidget(
+        modelName: tflitePath,
+        pipelinePath: pipelinePath,
+        isLocalFile: true,
+        localDir: model.localPath,
+        modelVersionId: model.versionId,
+        modelDisplayName: model.modelName,
+      );
+    default:
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Task type "${model.category}" is not yet supported for on-device inference.',
+          ),
+        ),
+      );
+      return;
+  }
+
+  Navigator.push(context, MaterialPageRoute(builder: (_) => inferenceWidget!));
+}
+
+// widget for the user
+class Profile extends ConsumerWidget {
+  const Profile({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final optedIn = ref.watch(telemetryOptInProvider);
+    final user = ref.watch(currentUserProvider);
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const SizedBox(height: 8),
+        Text(
+          'Profile',
+          style: theme.textTheme.titleSmall?.copyWith(
+            color: const Color(0xFF526870),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // ── Account ───────────────────────────────────────────────────────────
+        if (user == null)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.person_outline, size: 18, color: cs.primary),
+                      const SizedBox(width: 8),
+                      Text('Account', style: theme.textTheme.titleSmall),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Sign in to sync inference telemetry and access your account across devices.',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => showDialog<void>(
+                            context: context,
+                            builder: (_) =>
+                                const _AuthDialog(initialMode: _AuthMode.signIn),
+                          ),
+                          child: const Text('Sign in'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => showDialog<void>(
+                            context: context,
+                            builder: (_) => const _AuthDialog(
+                              initialMode: _AuthMode.createAccount,
+                            ),
+                          ),
+                          child: const Text('Create account'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: cs.primaryContainer,
+                    radius: 20,
+                    child: Text(
+                      (user.email ?? '?')[0].toUpperCase(),
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(color: cs.primary),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          user.email ?? 'Jacana user',
+                          style: theme.textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          'Signed in',
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await ref.read(authServiceProvider).signOut();
+                    },
+                    child: const Text('Sign out'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+        const SizedBox(height: 16),
+
+        // ── Privacy & Telemetry ───────────────────────────────────────────────
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.shield_outlined, size: 18, color: cs.primary),
+                    const SizedBox(width: 8),
+                    Text('Privacy', style: theme.textTheme.titleSmall),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Inference stats are always stored locally on your device. '
+                  'Enable below to share them anonymously — requires signing in '
+                  'to your Jacana account.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                const Divider(height: 24),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Share inference telemetry'),
+                  subtitle: const Text(
+                    'Latency, accuracy metrics, and device model — no personal data.',
+                  ),
+                  value: optedIn,
+                  onChanged:
+                      (v) =>
+                          ref.read(telemetryOptInProvider.notifier).setValue(v),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // ── Stats shortcut hint ───────────────────────────────────────────────
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.bar_chart_outlined,
+                    color: cs.primary,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Inference Stats',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'View per-model stats in the My AI tab.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Auth dialog ─────────────────────────────────────────────────────────────
+
+enum _AuthMode { signIn, createAccount }
+
+class _AuthDialog extends ConsumerStatefulWidget {
+  const _AuthDialog({required this.initialMode});
+
+  final _AuthMode initialMode;
+
+  @override
+  ConsumerState<_AuthDialog> createState() => _AuthDialogState();
+}
+
+class _AuthDialogState extends ConsumerState<_AuthDialog> {
+  late _AuthMode _mode;
+  final _emailCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  bool _loading = false;
+  String? _error;
+  bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _mode = widget.initialMode;
+  }
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _passwordCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final email = _emailCtrl.text.trim();
+    final password = _passwordCtrl.text;
+    if (email.isEmpty || password.isEmpty) {
+      setState(() => _error = 'Please enter your email and password.');
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final svc = ref.read(authServiceProvider);
+      if (_mode == _AuthMode.signIn) {
+        await svc.signIn(email, password);
+      } else {
+        final res = await svc.signUp(email, password);
+        // Supabase may require email confirmation before the session is active.
+        if (res.session == null) {
+          if (mounted) {
+            Navigator.of(context).pop();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Check your inbox to confirm your email, then sign in.',
+                ),
+              ),
+            );
+          }
+          return;
+        }
+      }
+      if (mounted) Navigator.of(context).pop();
+    } on AuthException catch (e) {
+      setState(() => _error = e.message);
+    } on SocketException {
+      setState(() => _error = "Couldn't reach the server. Check your connection.");
+    } on TimeoutException {
+      setState(() => _error = 'The request timed out. Please try again.');
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      setState(() => _error = (msg.contains('socket') ||
+              msg.contains('connection') ||
+              msg.contains('network'))
+          ? "Couldn't reach the server. Check your connection."
+          : 'Something went wrong. Please try again.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isSignIn = _mode == _AuthMode.signIn;
+
+    return AlertDialog(
+      title: Text(isSignIn ? 'Sign in to Jacana' : 'Create account'),
+      content: SizedBox(
+        width: 340,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _emailCtrl,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.next,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'Email',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordCtrl,
+              obscureText: _obscurePassword,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _loading ? null : _submit(),
+              decoration: InputDecoration(
+                labelText: 'Password',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscurePassword
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                  onPressed: () =>
+                      setState(() => _obscurePassword = !_obscurePassword),
+                ),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: cs.error),
+              ),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _loading ? null : _submit,
+              child: _loading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(isSignIn ? 'Sign in' : 'Create account'),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: _loading
+                  ? null
+                  : () => setState(() {
+                        _mode = isSignIn
+                            ? _AuthMode.createAccount
+                            : _AuthMode.signIn;
+                        _error = null;
+                      }),
+              child: Text(
+                isSignIn
+                    ? "Don't have an account? Create one"
+                    : 'Already have an account? Sign in',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _loading ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+      ],
     );
   }
 }
@@ -2226,8 +2807,9 @@ class _ModelStatCardState extends ConsumerState<_ModelStatCard> {
 
   @override
   Widget build(BuildContext context) {
-    final summaryAsync =
-        ref.watch(versionStatSummaryProvider(widget.model.versionId));
+    final summaryAsync = ref.watch(
+      versionStatSummaryProvider(widget.model.versionId),
+    );
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
@@ -2260,8 +2842,7 @@ class _ModelStatCardState extends ConsumerState<_ModelStatCard> {
                               ),
                             ),
                             backgroundColor: cs.secondaryContainer,
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 2),
+                            padding: const EdgeInsets.symmetric(horizontal: 2),
                             materialTapTargetSize:
                                 MaterialTapTargetSize.shrinkWrap,
                           ),
@@ -2274,8 +2855,9 @@ class _ModelStatCardState extends ConsumerState<_ModelStatCard> {
                         ),
                         Text(
                           'v${widget.model.versionName}',
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(color: cs.onSurfaceVariant),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
                         ),
                       ],
                     ),
@@ -2294,8 +2876,9 @@ class _ModelStatCardState extends ConsumerState<_ModelStatCard> {
                   if (summary == null || summary.totalRuns == 0) {
                     return Text(
                       'No inference runs recorded yet.',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     );
                   }
                   return Column(
@@ -2310,11 +2893,13 @@ class _ModelStatCardState extends ConsumerState<_ModelStatCard> {
                   );
                 },
                 loading: () => const LinearProgressIndicator(),
-                error: (_, __) => Text(
-                  'Could not load stats.',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: cs.error),
-                ),
+                error:
+                    (_, __) => Text(
+                      'Could not load stats.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.error,
+                      ),
+                    ),
               ),
             ],
           ),
@@ -2351,14 +2936,10 @@ class _StatsSummaryRow extends StatelessWidget {
         if (summary.avgConfidence != null && summary.avgConfidence! > 0)
           _StatChip(
             icon: Icons.star_outline,
-            label:
-                '${(summary.avgConfidence! * 100).toStringAsFixed(0)}% conf',
+            label: '${(summary.avgConfidence! * 100).toStringAsFixed(0)}% conf',
           ),
         if (summary.lastRunAt != null)
-          _StatChip(
-            icon: Icons.history,
-            label: _timeAgo(summary.lastRunAt!),
-          ),
+          _StatChip(icon: Icons.history, label: _timeAgo(summary.lastRunAt!)),
       ],
     );
   }
@@ -2412,8 +2993,9 @@ class _RecentRunsList extends ConsumerWidget {
           children: [
             Text(
               'Recent runs',
-              style: theme.textTheme.labelMedium
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 8),
             ...recent.map((s) => _RunRow(stat: s)),
@@ -2450,12 +3032,15 @@ class _RunRow extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             dateLabel,
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: cs.onSurfaceVariant),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: cs.onSurfaceVariant,
+            ),
           ),
           const SizedBox(width: 12),
-          Text('${stat.totalInferenceMs} ms',
-              style: theme.textTheme.labelSmall),
+          Text(
+            '${stat.totalInferenceMs} ms',
+            style: theme.textTheme.labelSmall,
+          ),
           if (stat.topConfidence != null) ...[
             const SizedBox(width: 12),
             Text(
@@ -2465,12 +3050,151 @@ class _RunRow extends StatelessWidget {
           ],
           const Spacer(),
           if (stat.synced)
-            Icon(Icons.cloud_done_outlined, size: 12,
-                color: cs.onSurfaceVariant),
+            Icon(
+              Icons.cloud_done_outlined,
+              size: 12,
+              color: cs.onSurfaceVariant,
+            ),
         ],
       ),
     );
   }
+}
+
+// ── Jacana bird logo ─────────────────────────────────────────────────────────
+// Cartoony Jacana bird drawn on a 100×100 logical canvas, scaled to widget size.
+// Colours match the African Jacana: chestnut body, dark-blue head, white cheek,
+// yellow frontal shield, grey legs with long splayed toes.
+class JacanaLogoPainter extends CustomPainter {
+  const JacanaLogoPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final sx = size.width / 100;
+    final sy = size.height / 100;
+    Offset p(double x, double y) => Offset(x * sx, y * sy);
+
+    Paint fill(Color c) => Paint()..color = c..style = PaintingStyle.fill;
+    Paint stroke(Color c, double w) => Paint()
+      ..color = c
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * sx
+      ..strokeCap = StrokeCap.round;
+
+    // ── Legs ─────────────────────────────────────────────────────────────────
+    const legColor = Color(0xFF7B9490);
+    canvas.drawLine(p(49, 74), p(43, 93), stroke(legColor, 3));
+    canvas.drawLine(p(60, 72), p(67, 91), stroke(legColor, 3));
+
+    // Front foot toes (very long — the jacana's signature)
+    for (final toe in [
+      [43.0, 93.0, 33.0, 96.0],
+      [43.0, 93.0, 44.0, 98.0],
+      [43.0, 93.0, 53.0, 96.0],
+    ]) {
+      canvas.drawLine(p(toe[0], toe[1]), p(toe[2], toe[3]), stroke(legColor, 2));
+    }
+    canvas.drawLine(p(43, 93), p(36, 99), stroke(legColor, 1.8));
+
+    // Back foot toes
+    for (final toe in [
+      [67.0, 91.0, 57.0, 94.0],
+      [67.0, 91.0, 68.0, 97.0],
+      [67.0, 91.0, 77.0, 94.0],
+    ]) {
+      canvas.drawLine(p(toe[0], toe[1]), p(toe[2], toe[3]), stroke(legColor, 2));
+    }
+
+    // ── Tail ─────────────────────────────────────────────────────────────────
+    final tail = Path()
+      ..moveTo(p(76, 60).dx, p(76, 60).dy)
+      ..cubicTo(p(87, 52).dx, p(87, 52).dy, p(90, 63).dx, p(90, 63).dy,
+          p(83, 68).dx, p(83, 68).dy)
+      ..cubicTo(p(79, 72).dx, p(79, 72).dy, p(73, 66).dx, p(73, 66).dy,
+          p(74, 62).dx, p(74, 62).dy)
+      ..close();
+    canvas.drawPath(tail, fill(const Color(0xFF9B3512)));
+
+    // ── Body ─────────────────────────────────────────────────────────────────
+    canvas.drawOval(
+      Rect.fromCenter(center: p(54, 60), width: 50 * sx, height: 38 * sy),
+      fill(const Color(0xFFC84A18)),
+    );
+
+    // Wing shading
+    final wing = Path()
+      ..moveTo(p(35, 63).dx, p(35, 63).dy)
+      ..cubicTo(p(41, 50).dx, p(41, 50).dy, p(70, 53).dx, p(70, 53).dy,
+          p(76, 61).dx, p(76, 61).dy)
+      ..cubicTo(p(72, 67).dx, p(72, 67).dy, p(56, 70).dx, p(56, 70).dy,
+          p(40, 67).dx, p(40, 67).dy)
+      ..close();
+    canvas.drawPath(wing,
+        fill(const Color(0xFFA83C14).withValues(alpha: 0.5)));
+
+    // ── Chest / throat (yellow) ───────────────────────────────────────────────
+    final chest = Path()
+      ..moveTo(p(34, 68).dx, p(34, 68).dy)
+      ..cubicTo(p(26, 60).dx, p(26, 60).dy, p(27, 48).dx, p(27, 48).dy,
+          p(34, 43).dx, p(34, 43).dy)
+      ..cubicTo(p(39, 48).dx, p(39, 48).dy, p(39, 60).dx, p(39, 60).dy,
+          p(37, 68).dx, p(37, 68).dy)
+      ..close();
+    canvas.drawPath(chest, fill(const Color(0xFFE09820)));
+
+    // ── Head (dark slate blue) ───────────────────────────────────────────────
+    canvas.drawCircle(p(33, 43), 16 * sx, fill(const Color(0xFF243C6A)));
+
+    // White cheek patch (rotated ellipse)
+    canvas.save();
+    canvas.translate(p(30, 49).dx, p(30, 49).dy);
+    canvas.rotate(-8 * 3.14159265 / 180);
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset.zero, width: 19 * sx, height: 13 * sy),
+      fill(const Color(0xFFECEAE8)),
+    );
+    canvas.restore();
+
+    // Yellow frontal shield (casque)
+    final shield = Path()
+      ..moveTo(p(26, 35).dx, p(26, 35).dy)
+      ..cubicTo(p(28, 27).dx, p(28, 27).dy, p(37, 29).dx, p(37, 29).dy,
+          p(37, 35).dx, p(37, 35).dy)
+      ..cubicTo(p(34, 40).dx, p(34, 40).dy, p(28, 39).dx, p(28, 39).dy,
+          p(26, 35).dx, p(26, 35).dy)
+      ..close();
+    canvas.drawPath(shield, fill(const Color(0xFFE29420)));
+
+    // Dark blue crown (top of head)
+    final crown = Path()
+      ..moveTo(p(22, 41).dx, p(22, 41).dy)
+      ..cubicTo(p(22, 33).dx, p(22, 33).dy, p(27, 27).dx, p(27, 27).dy,
+          p(34, 27).dx, p(34, 27).dy)
+      ..cubicTo(p(41, 27).dx, p(41, 27).dy, p(47, 33).dx, p(47, 33).dy,
+          p(47, 41).dx, p(47, 41).dy)
+      ..cubicTo(p(43, 38).dx, p(43, 38).dy, p(38, 36).dx, p(38, 36).dy,
+          p(34, 36).dx, p(34, 36).dy)
+      ..cubicTo(p(30, 36).dx, p(30, 36).dy, p(25, 38).dx, p(25, 38).dy,
+          p(22, 41).dx, p(22, 41).dy)
+      ..close();
+    canvas.drawPath(crown, fill(const Color(0xFF1A2D50)));
+
+    // ── Eye ──────────────────────────────────────────────────────────────────
+    canvas.drawCircle(p(28, 44), 4.5 * sx, fill(const Color(0xFF0D0D0D)));
+    canvas.drawCircle(p(27, 43), 1.8 * sx, fill(Colors.white));
+
+    // ── Beak ─────────────────────────────────────────────────────────────────
+    final beak = Path()
+      ..moveTo(p(20, 45).dx, p(20, 45).dy)
+      ..lineTo(p(6, 42).dx, p(6, 42).dy)
+      ..lineTo(p(20, 50).dx, p(20, 50).dy)
+      ..close();
+    canvas.drawPath(beak, fill(const Color(0xFF5E7872)));
+    canvas.drawLine(p(7, 46), p(20, 47), stroke(const Color(0xFF4A6260), 0.8));
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 // provider for selected page
@@ -2502,7 +3226,7 @@ class _ModelList extends ConsumerState<ModelList> {
   @override
   void initState() {
     super.initState();
-    pages = [Models(), DownloadedModels(), ModelRange(), Profile()];
+    pages = [Models(), DownloadedModels(), RangeTab(), Profile()];
   }
 
   @override
@@ -2519,17 +3243,13 @@ class _ModelList extends ConsumerState<ModelList> {
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: const Color(0xFF0284C7),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Icon(Icons.psychology, color: Colors.white, size: 18),
+            const SizedBox(
+              width: 34,
+              height: 34,
+              child: CustomPaint(painter: JacanaLogoPainter()),
             ),
             const SizedBox(width: 8),
-            const Text('Pocket AI'),
+            const Text('Jacana'),
           ],
         ),
         centerTitle: true,

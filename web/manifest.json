@@ -1,11 +1,11 @@
 {
-    "name": "model_range",
-    "short_name": "model_range",
+    "name": "jacana",
+    "short_name": "jacana",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Jacana — edge AI model marketplace for mobile.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
