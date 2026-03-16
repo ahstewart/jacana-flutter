@@ -18,6 +18,8 @@ import 'features/object_detection/object_detection.dart';
 import 'features/text_generation/text_generation.dart';
 import 'features/semantic_segmentation/semantic_segmentation.dart';
 import 'features/automatic_speech_recognition/asr_widget.dart';
+import 'features/image_to_text/image_to_text_widget.dart';
+import 'features/text_to_image/text_to_image_widget.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/services/stats_service.dart';
@@ -428,6 +430,12 @@ IconData _taskIcon(String task) {
   }
   if (task.contains('speech') || task.contains('audio') || task.contains('asr')) {
     return (const Color(0xFFDBEAFE), const Color(0xFF1E3A8A)); // blue container
+  }
+  if (task == 'image_to_text' || task == 'image-to-text') {
+    return (const Color(0xFFEDE9FE), const Color(0xFF3730A3)); // violet container
+  }
+  if (task == 'text_to_image' || task == 'text-to-image') {
+    return (const Color(0xFFFCE7F3), const Color(0xFF831843)); // pink container
   }
   return (cs.primaryContainer, cs.onPrimaryContainer);
 }
@@ -2410,6 +2418,26 @@ void _launchInference(BuildContext context, DownloadedModel model) {
     case 'automatic_speech_recognition':
     case 'automatic-speech-recognition':
       inferenceWidget = AutomaticSpeechRecognitionWidget(
+        modelName: tflitePath,
+        pipelinePath: pipelinePath,
+        isLocalFile: true,
+        localDir: model.localPath,
+        modelVersionId: model.versionId,
+        modelDisplayName: model.modelName,
+      );
+    case 'image_to_text':
+    case 'image-to-text':
+      inferenceWidget = ImageToTextWidget(
+        modelName: tflitePath,
+        pipelinePath: pipelinePath,
+        isLocalFile: true,
+        localDir: model.localPath,
+        modelVersionId: model.versionId,
+        modelDisplayName: model.modelName,
+      );
+    case 'text_to_image':
+    case 'text-to-image':
+      inferenceWidget = TextToImageWidget(
         modelName: tflitePath,
         pipelinePath: pipelinePath,
         isLocalFile: true,

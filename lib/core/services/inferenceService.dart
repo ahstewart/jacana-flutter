@@ -700,6 +700,16 @@ class InferenceService {
         return ErrorResult(
           "Postprocessing for '$outputName' (text) did not produce a String. Got ${currentResult.runtimeType}",
         );
+      case 'image_to_text':
+        if (currentResult is String) return TextResult(currentResult);
+        return ErrorResult(
+          "image_to_text postprocessing did not produce a String for '$outputName'.",
+        );
+      case 'generated_image':
+        if (currentResult is img.Image) return GeneratedImageResult(currentResult);
+        return ErrorResult(
+          "generated_image postprocessing did not produce an img.Image for '$outputName'.",
+        );
       case 'speech_recognition':
         if (currentResult is String) {
           return SpeechResult(currentResult);
@@ -989,86 +999,85 @@ class InferenceService {
           }
         }
 
-        // get finalData shape for further processing
-        List<int> finaldataShape;
         debugPrint("finalData runtime type = ${finalData.runtimeType}");
-        if (finalData is Float32List || finalData is Uint8List) {
+
+        // Compute the proper spatial shape and, if needed, reorder channels.
+        // imgToBytes always produces pixels in H*W*C (NHWC) row-major order.
+        List<int> finaldataShape;
+        if ((finalData is Float32List || finalData is Uint8List) &&
+            inputData is img.Image) {
+          final int H = inputData.height;
+          final int W = inputData.width;
+          const int C = 3; // imgToBytes outputs 3-channel RGB/BGR
+          if (dataLayout == 'nchw') {
+            // Reorder bytes from NHWC → NCHW in-place.
+            if (finalData is Float32List) {
+              final out = Float32List(H * W * C);
+              for (int h = 0; h < H; h++)
+                for (int w = 0; w < W; w++)
+                  for (int c = 0; c < C; c++)
+                    out[c * H * W + h * W + w] =
+                        (finalData as Float32List)[h * W * C + w * C + c];
+              finalData = out;
+            } else {
+              final out = Uint8List(H * W * C);
+              for (int h = 0; h < H; h++)
+                for (int w = 0; w < W; w++)
+                  for (int c = 0; c < C; c++)
+                    out[c * H * W + h * W + w] =
+                        (finalData as Uint8List)[h * W * C + w * C + c];
+              finalData = out;
+            }
+            finaldataShape = [1, C, H, W];
+          } else {
+            // NHWC — already the correct byte order.
+            finaldataShape = [1, H, W, C];
+          }
+        } else if (finalData is Float32List || finalData is Uint8List) {
           finaldataShape = [1, finalData.length];
         } else {
           finaldataShape = finalData.shape;
         }
 
-        /*
-        // then check data layout (ex: NHWC)
-        // if target layout is NHWC, convert to NHWC if not already there, can only take NCHW as input
-        if (dataLayout == 'nhwc' && !isNHWC(inputData.shape)) {
-          if (isNCHW(inputData.shape)) {
-            finalData = nchwToNhwc(inputData);
-          }
-          else {
-            throw Exception("Only NCHW layouts can be converted to NHWC.");
-          }
-        }
-        // if target layout is NCHW, convert to NCHW if not already there, can only take NHWC as input
-        if (dataLayout == 'nchw' && !isNCHW(inputData.shape)) {
-          if (isNHWC(inputData.shape)) {
-            finalData = nhwcToNchw(inputData);
-          }
-          else {
-            throw Exception("Only NHWC layouts can be converted to NCHW.");
-          }
-        }
-        */
-
-        // lastly, check that the shape is identical to the shape parameter of the input object
-        List<int> targetInputShape = [];
-        // Prefer actual interpreter input tensor shape (catches LLM-generated mismatches).
-        final actualInputShape = _getActualInputShape(
-          preprocessingBlockIndex,
-          [],
-        );
-        if (actualInputShape.isNotEmpty) {
-          targetInputShape = actualInputShape;
-        } else {
-          String preprocessingBlockInputName =
+        // Use actual interpreter tensor shape as authoritative target.
+        List<int> targetInputShape = _getActualInputShape(preprocessingBlockIndex, []);
+        if (targetInputShape.isEmpty) {
+          final inputName =
               modelPipeline!.preprocessing[preprocessingBlockIndex].input_name;
-          for (var inputs in modelPipeline!.inputs) {
-            if (inputs.name == preprocessingBlockInputName) {
-              targetInputShape = inputs.shape;
+          for (final inp in modelPipeline!.inputs) {
+            if (inp.name == inputName) {
+              targetInputShape = inp.shape;
               break;
             }
           }
         }
 
-        if (finaldataShape != targetInputShape) {
-          if (kDebugMode) {
-            debugPrint(
-              "Final formatted data shape $finaldataShape does not match target input shape $targetInputShape",
-            );
-            debugPrint(
-              "Attempting to convert final data to target input shape",
-            );
-          }
+        // Decide the reshape target: prefer interpreter shape when element counts match.
+        final int dataLen = (finalData is Float32List)
+            ? (finalData as Float32List).length
+            : (finalData is Uint8List ? (finalData as Uint8List).length : 0);
+        final int targetLen =
+            targetInputShape.fold<int>(1, (a, b) => a * b);
+        final List<int> reshapeTarget =
+            (targetInputShape.isNotEmpty && dataLen == targetLen)
+                ? targetInputShape
+                : finaldataShape;
 
-          try {
-            switch (targetDtype.toLowerCase()) {
-              case 'float32':
-                return (finalData as Float32List).reshape(targetInputShape);
-              case 'uint8':
-              case 'int8':
-                return (finalData as Uint8List).reshape(targetInputShape);
-            }
-          } catch (e) {
-            if (kDebugMode) {
-              debugPrint(
-                "Reshape error: $e. Input shape: $finaldataShape, Target shape: $targetInputShape",
-              );
-            }
-            return finalData;
-          }
+        if (kDebugMode && finaldataShape.toString() != targetInputShape.toString()) {
+          debugPrint(
+            "format: spatial shape $finaldataShape, model expects $targetInputShape"
+            "${dataLen == targetLen ? ' — reshaping to model shape' : ' — incompatible, model may not accept direct image input'}",
+          );
         }
 
-        return finalData;
+        try {
+          return (finalData is Float32List)
+              ? (finalData as Float32List).reshape(reshapeTarget)
+              : (finalData as Uint8List).reshape(reshapeTarget);
+        } catch (e) {
+          if (kDebugMode) debugPrint("format step reshape failed: $e");
+          return finalData;
+        }
 
       // tokenize text input to a tensor of token IDs
       case 'tokenize':
@@ -2185,6 +2194,60 @@ class InferenceService {
           }
         }
         processedOutput = sb.toString().trim();
+
+      case 'decode_image':
+        // Converts a raw pixel tensor [1, H, W, C] (HWC) or [1, C, H, W] (CHW)
+        // to an img.Image. Params: channel_format ("HWC"|"CHW"), value_range ("0_1"|"neg1_1"|"0_255").
+        final channelFormat = (step.params['channel_format'] as String?) ?? 'HWC';
+        final valueRange    = (step.params['value_range']    as String?) ?? '0_1';
+
+        int _scaleToUint8(num raw) {
+          final double v = raw.toDouble();
+          final double scaled;
+          switch (valueRange) {
+            case 'neg1_1':
+              scaled = (v + 1.0) / 2.0 * 255.0;
+            case '0_255':
+              scaled = v;
+            default: // '0_1'
+              scaled = v * 255.0;
+          }
+          return scaled.round().clamp(0, 255);
+        }
+
+        final batch = (processedOutput as List)[0] as List;
+        final img.Image decodedImg;
+
+        if (channelFormat == 'CHW') {
+          // batch: [C][H][W]
+          final int C = batch.length;
+          final int H = (batch[0] as List).length;
+          final int W = ((batch[0] as List)[0] as List).length;
+          decodedImg = img.Image(width: W, height: H);
+          for (int h = 0; h < H; h++) {
+            for (int w = 0; w < W; w++) {
+              final r = _scaleToUint8(((batch[0] as List)[h] as List)[w] as num);
+              final g = C > 1 ? _scaleToUint8(((batch[1] as List)[h] as List)[w] as num) : r;
+              final b = C > 2 ? _scaleToUint8(((batch[2] as List)[h] as List)[w] as num) : r;
+              decodedImg.setPixel(w, h, img.ColorRgb8(r, g, b));
+            }
+          }
+        } else {
+          // HWC: batch: [H][W][C]
+          final int H = batch.length;
+          final int W = (batch[0] as List).length;
+          decodedImg = img.Image(width: W, height: H);
+          for (int h = 0; h < H; h++) {
+            for (int w = 0; w < W; w++) {
+              final pixel = (batch[h] as List)[w] as List;
+              final r = _scaleToUint8(pixel[0] as num);
+              final g = pixel.length > 1 ? _scaleToUint8(pixel[1] as num) : r;
+              final b = pixel.length > 2 ? _scaleToUint8(pixel[2] as num) : r;
+              decodedImg.setPixel(w, h, img.ColorRgb8(r, g, b));
+            }
+          }
+        }
+        processedOutput = decodedImg;
 
       default:
         if (kDebugMode) {
