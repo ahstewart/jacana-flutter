@@ -9,6 +9,7 @@ part of 'api_models.dart';
 AssetPointers _$AssetPointersFromJson(Map<String, dynamic> json) =>
     AssetPointers(
       tflite: json['tflite'] as String,
+      tflite_files: (json['tflite_files'] as Map<String, dynamic>?),
       labels: json['labels'] as String?,
       tokenizer: json['tokenizer'] as String?,
       vocab: json['vocab'] as String?,
@@ -18,6 +19,7 @@ AssetPointers _$AssetPointersFromJson(Map<String, dynamic> json) =>
 Map<String, dynamic> _$AssetPointersToJson(AssetPointers instance) =>
     <String, dynamic>{
       'tflite': instance.tflite,
+      'tflite_files': instance.tflite_files,
       'labels': instance.labels,
       'tokenizer': instance.tokenizer,
       'vocab': instance.vocab,

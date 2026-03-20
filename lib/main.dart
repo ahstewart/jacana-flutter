@@ -1212,13 +1212,18 @@ class _VersionTileState extends ConsumerState<_VersionTile> {
     final inProgressNotifier = ref.read(inProgressDownloadsProvider.notifier);
 
     // Compute the asset list here so we know totalSteps before closing.
-    final assetKeys = <String>[
-      'tflite',
-      if (version.assets.labels != null) 'labels',
-      if (version.assets.anchors != null) 'anchors',
-      if (version.assets.tokenizer != null) 'tokenizer',
-      if (version.assets.vocab != null) 'vocab',
-    ];
+    final assetKeys = <String>[];
+    if (version.assets.tflite_files != null) {
+      for (final name in version.assets.tflite_files!.keys) {
+        assetKeys.add('tflite_$name');
+      }
+    } else {
+      assetKeys.add('tflite');
+    }
+    if (version.assets.labels != null) assetKeys.add('labels');
+    if (version.assets.anchors != null) assetKeys.add('anchors');
+    if (version.assets.tokenizer != null) assetKeys.add('tokenizer');
+    if (version.assets.vocab != null) assetKeys.add('vocab');
     final totalSteps =
         assetKeys.length + (version.pipeline_spec != null ? 1 : 0);
 
@@ -1583,13 +1588,18 @@ class VersionCard extends ConsumerWidget {
         debugPrint('[Download] Created directory: ${versionDir.path}');
       }
 
-      final assetKeys = <String>[
-        'tflite',
-        if (version.assets.labels != null) 'labels',
-        if (version.assets.anchors != null) 'anchors',
-        if (version.assets.tokenizer != null) 'tokenizer',
-        if (version.assets.vocab != null) 'vocab',
-      ];
+      final assetKeys = <String>[];
+      if (version.assets.tflite_files != null) {
+        for (final name in version.assets.tflite_files!.keys) {
+          assetKeys.add('tflite_$name');
+        }
+      } else {
+        assetKeys.add('tflite');
+      }
+      if (version.assets.labels != null) assetKeys.add('labels');
+      if (version.assets.anchors != null) assetKeys.add('anchors');
+      if (version.assets.tokenizer != null) assetKeys.add('tokenizer');
+      if (version.assets.vocab != null) assetKeys.add('vocab');
       debugPrint('[Download] Assets to fetch: $assetKeys');
 
       for (final assetKey in assetKeys) {
@@ -2367,7 +2377,12 @@ class _DownloadedModelsState extends ConsumerState<DownloadedModels> {
 }
 
 void _launchInference(BuildContext context, DownloadedModel model) {
-  final tflitePath = '${model.localPath}/tflite';
+  // For encoder-decoder models, the decoder is the primary model used during
+  // the decode loop. Fall back to the single-file 'tflite' for standard models.
+  final decoderFile = File('${model.localPath}/tflite_decoder');
+  final tflitePath = decoderFile.existsSync()
+      ? decoderFile.path
+      : '${model.localPath}/tflite';
   final pipelinePath = '${model.localPath}/pipeline_spec.json';
 
   Widget? inferenceWidget;

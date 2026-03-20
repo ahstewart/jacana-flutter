@@ -8,6 +8,8 @@ part 'api_models.g.dart';
 @JsonSerializable()
 class AssetPointers {
   final String tflite;
+  @JsonKey(defaultValue: null)
+  final Map<String, dynamic>? tflite_files;
   final String? labels;
   final String? tokenizer;
   final String? vocab;
@@ -15,6 +17,7 @@ class AssetPointers {
 
   AssetPointers({
     required this.tflite,
+    this.tflite_files,
     this.labels,
     this.tokenizer,
     this.vocab,

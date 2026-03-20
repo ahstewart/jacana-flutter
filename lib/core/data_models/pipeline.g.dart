@@ -27,6 +27,8 @@ Pipeline _$PipelineFromJson(Map<String, dynamic> json) => Pipeline(
       (json['postprocessing'] as List<dynamic>)
           .map((e) => ProcessingBlock.fromJson(e as Map<String, dynamic>))
           .toList(),
+  model_files: (json['model_files'] as Map<String, dynamic>?)
+      ?.map((k, v) => MapEntry(k, v as String)),
 );
 
 Map<String, dynamic> _$PipelineToJson(Pipeline instance) => <String, dynamic>{
@@ -35,6 +37,7 @@ Map<String, dynamic> _$PipelineToJson(Pipeline instance) => <String, dynamic>{
   'outputs': instance.outputs,
   'preprocessing': instance.preprocessing,
   'postprocessing': instance.postprocessing,
+  'model_files': instance.model_files,
 };
 
 ModelMetadata _$ModelMetadataFromJson(Map<String, dynamic> json) {

@@ -131,6 +131,7 @@ class InferenceService {
   Interpreter? _interpreter;
   IsolateInterpreter? _isolateInterpreter;
   InferenceModel? _mediaPipeLlm;
+  Interpreter? _encoderInterpreter;
   Pipeline? modelPipeline;
 
   List<String>? _labels;
@@ -139,7 +140,8 @@ class InferenceService {
   // Used by the autoregressive 'generate' postprocessing step.
   Map<String, dynamic> _lastPreprocessedInputs = {};
   bool get isReady =>
-      (_interpreter != null || _mediaPipeLlm != null) && modelPipeline != null;
+      (_interpreter != null || _mediaPipeLlm != null || _encoderInterpreter != null)
+      && modelPipeline != null;
 
   bool get _isMediaPipeLlm =>
       modelPipeline?.metadata.firstOrNull?.framework == 'mediapipe_litert';
@@ -180,6 +182,21 @@ class InferenceService {
       return;
     }
     await loadModel(modelPath); // Load model
+    // Load encoder interpreter for multi-file encoder-decoder models
+    if (isLocalFile && localDir != null && modelPipeline?.model_files != null) {
+      final encoderKey = modelPipeline!.model_files!['encoder'];
+      if (encoderKey != null) {
+        final encoderPath = '$localDir/$encoderKey';
+        final encoderFile = File(encoderPath);
+        if (encoderFile.existsSync()) {
+          final options = InterpreterOptions()..threads = 4;
+          _encoderInterpreter = Interpreter.fromFile(encoderFile, options: options);
+          debugPrint('[InferenceService] Encoder interpreter loaded: $encoderPath');
+        } else {
+          debugPrint('[InferenceService] Warning: encoder file not found at $encoderPath');
+        }
+      }
+    }
     await loadLabelsIfNeeded(); // Load labels if needed by any postprocessing step
     await loadTokenizerIfNeeded(); // Load tokenizer if any preprocessing block uses text input
   }
@@ -598,8 +615,9 @@ class InferenceService {
     // they don't read from rawOutputs, so skip the source tensor check.
     final bool isAutoregressiveBlock =
         block.steps.isNotEmpty &&
-        block.steps.first.step == 'generate' &&
-        (block.steps.first.params['mode'] as String?) == 'autoregressive';
+        ((block.steps.first.step == 'generate' &&
+            (block.steps.first.params['mode'] as String?) == 'autoregressive') ||
+         block.steps.first.step == 'encoder_decoder_generate');
 
     if (!isAutoregressiveBlock) {
       // check that all source tensors in the postprocessing block are present in the output map
@@ -1370,13 +1388,14 @@ class InferenceService {
     List<IO> outputs = modelPipeline!.outputs;
 
     // Skip the initial inference pass for autoregressive pipelines — the
-    // 'generate' postprocessing step runs its own loop from _lastPreprocessedInputs
-    // and ignores this output entirely, so running it here is wasted work.
+    // 'generate' or 'encoder_decoder_generate' postprocessing step runs its own
+    // loop from _lastPreprocessedInputs and ignores this output entirely.
     final bool isAutoregressive = modelPipeline!.postprocessing.any(
       (block) => block.steps.any(
         (s) =>
-            s.step == 'generate' &&
-            (s.params['mode'] as String?) == 'autoregressive',
+            (s.step == 'generate' &&
+                (s.params['mode'] as String?) == 'autoregressive') ||
+            s.step == 'encoder_decoder_generate',
       ),
     );
 
@@ -1645,6 +1664,8 @@ class InferenceService {
     _isolateInterpreter = null;
     _interpreter?.close();
     _interpreter = null;
+    _encoderInterpreter?.close();
+    _encoderInterpreter = null;
     modelPipeline = null;
     if (kDebugMode) {
       debugPrint("Inference Object disposed.");
@@ -2080,6 +2101,60 @@ class InferenceService {
           );
         }
 
+      // encoder-decoder generation: run encoder once, then autoregressively decode
+      case 'encoder_decoder_generate':
+        final int maxNewTokens = (step.params['max_new_tokens'] as num?)?.toInt() ?? 128;
+        final int? eosTokenId = (step.params['eos_token_id'] as num?)?.toInt();
+        final int bosTokenId = (step.params['bos_token_id'] as num?)?.toInt()
+            ?? _tokenizer?.bosId ?? 0;
+        final double temperature = (step.params['temperature'] as num?)?.toDouble() ?? 1.0;
+        final bool doSample = step.params['do_sample'] as bool? ?? false;
+        final int decoderSeqLen = (step.params['decoder_seq_len'] as num?)?.toInt()
+            ?? _getModelInputSeqLen(fallback: 128);
+
+        if (!isLocalFile || localDir == null) {
+          throw StateError(
+            'encoder_decoder_generate requires a local model file.',
+          );
+        }
+
+        final mf = modelPipeline!.model_files ?? {};
+        final encoderKey = mf['encoder'] ?? 'tflite_encoder';
+        final decoderKey = mf['decoder'] ?? 'tflite_decoder';
+        final encoderPath = '$localDir/$encoderKey';
+        final decoderPath = '$localDir/$decoderKey';
+
+        // Preprocessed image inputs are in _lastPreprocessedInputs
+        final encoderInputs = <Object>[];
+        final encoderInputShapes = <List<int>>[];
+        for (final v in _lastPreprocessedInputs.values) {
+          encoderInputs.add(v as Object);
+          encoderInputShapes.add(_inferListShape(v));
+        }
+
+        final List<int> tokenIds = await compute(
+          _runEncDecGenerateIsolate,
+          _EncDecGenerateRequest(
+            encoderPath: encoderPath,
+            decoderPath: decoderPath,
+            encoderInputs: encoderInputs,
+            encoderInputShapes: encoderInputShapes,
+            decoderSeqLen: decoderSeqLen,
+            bosTokenId: bosTokenId,
+            eosTokenId: eosTokenId,
+            maxNewTokens: maxNewTokens,
+            temperature: temperature,
+            doSample: doSample,
+          ),
+        );
+        processedOutput = tokenIds;
+        if (kDebugMode) {
+          debugPrint(
+            '[EncDecGenerate] Done: ${tokenIds.length} tokens. '
+            'First 20 IDs: ${tokenIds.take(20).toList()}',
+          );
+        }
+
       // decode a list of token IDs back to a string
       case 'decode_tokens':
         if (_tokenizer == null) {
@@ -2490,7 +2565,116 @@ List<int> _runGenerateIsolate(_GenerateRequest req) {
   return generatedTokens;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Background isolate support for encoder-decoder generation
+// ─────────────────────────────────────────────────────────────────────────────
 
+class _EncDecGenerateRequest {
+  final String encoderPath;
+  final String decoderPath;
+  final List<Object> encoderInputs;
+  final List<List<int>> encoderInputShapes;
+  final int decoderSeqLen;
+  final int bosTokenId;
+  final int? eosTokenId;
+  final int maxNewTokens;
+  final double temperature;
+  final bool doSample;
+
+  const _EncDecGenerateRequest({
+    required this.encoderPath,
+    required this.decoderPath,
+    required this.encoderInputs,
+    required this.encoderInputShapes,
+    required this.decoderSeqLen,
+    required this.bosTokenId,
+    this.eosTokenId,
+    required this.maxNewTokens,
+    required this.temperature,
+    required this.doSample,
+  });
+}
+
+/// Runs encoder once, then autoregressively decodes with the decoder.
+/// Both interpreters are created fresh inside the isolate.
+List<int> _runEncDecGenerateIsolate(_EncDecGenerateRequest req) {
+  final opts = InterpreterOptions()..threads = 4;
+
+  // 1. Encoder — run once
+  final encoder = Interpreter.fromFile(File(req.encoderPath), options: opts);
+  for (int i = 0; i < req.encoderInputShapes.length; i++) {
+    if (req.encoderInputShapes[i].isNotEmpty) {
+      encoder.resizeInputTensor(i, req.encoderInputShapes[i]);
+    }
+  }
+  encoder.allocateTensors();
+  final encInTensors = encoder.getInputTensors();
+  for (int i = 0; i < req.encoderInputs.length && i < encInTensors.length; i++) {
+    encInTensors[i].setTo(req.encoderInputs[i]);
+  }
+  encoder.invoke();
+
+  // Extract encoder hidden states — shape [1, enc_seq, hidden_dim]
+  final encOutTensors = encoder.getOutputTensors();
+  final encShape = List<int>.from(encOutTensors[0].shape);
+  final encTotal = encShape.fold(1, (int a, int b) => a * b);
+  final encBuf = ListShape(List<double>.filled(encTotal, 0.0)).reshape(encShape);
+  encOutTensors[0].copyTo(encBuf);
+  encoder.close();
+
+  // 2. Decoder — autoregressive loop
+  final decoder = Interpreter.fromFile(File(req.decoderPath), options: opts);
+  final List<int> generated = [];
+  List<int> ids = [req.bosTokenId];
+
+  for (int step = 0; step < req.maxNewTokens; step++) {
+    // Keep at most decoderSeqLen tokens (sliding window)
+    final List<int> window = ids.length >= req.decoderSeqLen
+        ? ids.sublist(ids.length - req.decoderSeqLen)
+        : ids;
+    // Right-pad to decoderSeqLen
+    final List<int> padded = window.length < req.decoderSeqLen
+        ? [...window, ...List.filled(req.decoderSeqLen - window.length, 0)]
+        : List<int>.from(window);
+
+    decoder.resizeInputTensor(0, [1, req.decoderSeqLen]);
+    decoder.resizeInputTensor(1, encShape);
+    decoder.allocateTensors();
+
+    final decInTensors = decoder.getInputTensors();
+    decInTensors[0].setTo([padded]);
+    decInTensors[1].setTo(encBuf);
+    decoder.invoke();
+
+    final decOutTensors = decoder.getOutputTensors();
+    final logitsShape = List<int>.from(decOutTensors[0].shape);
+    final logitsTotal = logitsShape.fold(1, (int a, int b) => a * b);
+    final logitsBuf = ListShape(List<double>.filled(logitsTotal, 0.0)).reshape(logitsShape);
+    decOutTensors[0].copyTo(logitsBuf);
+
+    // Logits at last real position: [1, seqLen, vocabSize] -> [vocabSize]
+    final int lastPos = (ids.length - 1).clamp(0, req.decoderSeqLen - 1);
+    final List logitsRaw = ((logitsBuf[0] as List)[lastPos] as List);
+    final List<double> logits =
+        logitsRaw.map((v) => (v as num).toDouble()).toList();
+
+    // Greedy argmax
+    int nextToken = 0;
+    double best = logits[0];
+    for (int i = 1; i < logits.length; i++) {
+      if (logits[i] > best) {
+        best = logits[i];
+        nextToken = i;
+      }
+    }
+
+    generated.add(nextToken);
+    if (req.eosTokenId != null && nextToken == req.eosTokenId) break;
+    ids = [...ids, nextToken];
+  }
+  decoder.close();
+  return generated;
+}
 
 
 

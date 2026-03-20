@@ -13,6 +13,8 @@ class Pipeline {
   final List<IO> outputs;
   final List<ProcessingBlock> preprocessing;
   final List<ProcessingBlock> postprocessing;
+  @JsonKey(defaultValue: null)
+  final Map<String, String>? model_files;
 
   Pipeline({
     required this.metadata,
@@ -20,6 +22,7 @@ class Pipeline {
     required this.outputs,
     required this.preprocessing,
     required this.postprocessing,
+    this.model_files,
   });
 
   // factory to generate Dart object from decoded JSON
