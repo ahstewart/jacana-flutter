@@ -206,7 +206,7 @@ class ModelVersion {
   });
 
   /// True if this version has a runnable pipeline (verified or pending verification).
-  bool get isUsable => status == 'supported' || status == 'pending';
+  bool get isUsable => status == 'verified' || status == 'pending';
 
   factory ModelVersion.fromJson(Map<String, dynamic> json) =>
       _$ModelVersionFromJson(json);

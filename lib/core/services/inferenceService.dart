@@ -255,9 +255,8 @@ class InferenceService {
           debugPrint(_interpreter?.getOutputTensors().toString());
         }
       } catch (e) {
-        if (kDebugMode) {
-          debugPrint("Failed to load model: $e");
-        }
+        debugPrint("Failed to load model: $e");
+        rethrow;
       }
     }
   }

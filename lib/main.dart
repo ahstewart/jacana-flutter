@@ -55,32 +55,31 @@ String _formatBytes(int bytes) {
 }
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  // TODO: Replace with your Supabase project URL and anon key.
-  // For local development with `supabase start`, the URL is typically
-  // http://10.0.2.2:54321 (Android emulator) and the anon key is printed
-  // by `supabase status`. For production, use your project's values from
-  // the Supabase dashboard (Settings → API).
-  await Supabase.initialize(
-    url: 'http://10.0.2.2:54321',
-    anonKey: 'YOUR_SUPABASE_ANON_KEY',
-  );
-
-  await DeviceInfoHelper.init();
-  FlutterError.onError = (FlutterErrorDetails details) {
-    FlutterError.presentError(details); // Still show red screen in debug
-    debugPrint('Caught by global error handler: ${details.exception}');
-    // Optionally, you can log details.stack as well
-  };
-  // This will catch all uncaught async errors
   runZonedGuarded(
-    () {
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+
+      // TODO: Replace with your Supabase project URL and anon key.
+      // For local development with `supabase start`, the URL is typically
+      // http://10.0.2.2:54321 (Android emulator) and the anon key is printed
+      // by `supabase status`. For production, use your project's values from
+      // the Supabase dashboard (Settings → API).
+      await Supabase.initialize(
+        url: 'http://10.0.2.2:54321',
+        anonKey: 'YOUR_SUPABASE_ANON_KEY',
+      );
+
+      await DeviceInfoHelper.init();
+
+      FlutterError.onError = (FlutterErrorDetails details) {
+        FlutterError.presentError(details); // Still show red screen in debug
+        debugPrint('Caught by global error handler: ${details.exception}');
+      };
+
       runApp(ProviderScope(child: const MyApp()));
     },
     (error, stackTrace) {
       debugPrint('Uncaught async error: $error');
-      // Optionally log stackTrace
     },
   );
 }
@@ -443,7 +442,7 @@ IconData _taskIcon(String task) {
 /// Returns the best pipeline status for a model, using the pre-computed
 /// backend field best_version_status.
 String _bestStatus(MLModel model) =>
-    model.best_version_status ?? 'unsupported';
+    model.best_version_status ?? 'missing';
 
 String _friendlyTask(String category) => category
     .split('_')
@@ -499,7 +498,7 @@ class _ModelsState extends ConsumerState<Models> {
         // Apply search, task filters, and hide unsupported models
         var filtered =
             modelList.where((m) {
-              if (_bestStatus(m) == 'unsupported') return false;
+              if (_bestStatus(m) == 'missing') return false;
               final q = _searchQuery.toLowerCase();
               final matchesSearch =
                   q.isEmpty ||
@@ -627,7 +626,7 @@ class _ModelsState extends ConsumerState<Models> {
                   children: [
                     for (final entry in const [
                       (null, 'All'),
-                      ('supported', 'Supported'),
+                      ('verified', 'Verified'),
                       ('pending', 'Pending'),
                     ])
                       Padding(
@@ -860,16 +859,16 @@ class _ModelCard extends StatelessWidget {
                           const SizedBox(width: 8),
                           Builder(builder: (context) {
                             final status = _bestStatus(model);
-                            final color = status == 'supported'
+                            final color = status == 'verified'
                                 ? Colors.green[600]!
                                 : status == 'pending'
                                     ? Colors.amber[700]!
                                     : cs.outlineVariant;
-                            final label = status == 'supported'
-                                ? 'Supported'
+                            final label = status == 'verified'
+                                ? 'Verified'
                                 : status == 'pending'
                                     ? 'Pending'
-                                    : 'Unsupported';
+                                    : 'Missing';
                             return Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
@@ -1850,17 +1849,23 @@ class _VersionStatRow extends ConsumerWidget {
             children: [
               const Icon(Icons.speed, size: 13),
               const SizedBox(width: 4),
-              Text(
-                '${summary.totalRuns} run${summary.totalRuns == 1 ? '' : 's'} · avg ${summary.avgLatencyMs.toStringAsFixed(0)}ms',
-                style: Theme.of(context).textTheme.labelSmall,
+              Flexible(
+                child: Text(
+                  '${summary.totalRuns} run${summary.totalRuns == 1 ? '' : 's'} · avg ${summary.avgLatencyMs.toStringAsFixed(0)}ms',
+                  style: Theme.of(context).textTheme.labelSmall,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              if (summary.avgConfidence! > 0) ...[
+              if ((summary.avgConfidence ?? 0) > 0) ...[
                 const SizedBox(width: 8),
                 const Icon(Icons.check_circle_outline, size: 13),
                 const SizedBox(width: 4),
-                Text(
-                  '${(summary.avgConfidence! * 100).toStringAsFixed(0)}% avg confidence',
-                  style: Theme.of(context).textTheme.labelSmall,
+                Flexible(
+                  child: Text(
+                    '${(summary.avgConfidence! * 100).toStringAsFixed(0)}% avg confidence',
+                    style: Theme.of(context).textTheme.labelSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ],
